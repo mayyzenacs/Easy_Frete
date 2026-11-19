@@ -2,11 +2,14 @@ namespace EasyFrete.Api.Models;
 
 public class Usuario
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; set; } = Guid.CreateVersion7();
     public string Nome { get; set; } = string.Empty;
     public string Email { get; set; } = string.Empty;
-    public string SenhaHash { get; set; } = string.Empty;
+    public string PasswordHash { get; set; } = string.Empty;
+    public string Role { get; set; } = "User";
+    public string Status { get; set; } = "Pendente";
     public DateTime CriadoEm { get; set; } = DateTime.UtcNow;
+    public DateTime? AtualizadoEm { get; set; }
 }
 
 public class Produto
