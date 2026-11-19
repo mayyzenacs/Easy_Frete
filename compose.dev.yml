@@ -1,0 +1,48 @@
+services:
+  backend:
+    build:
+      context: ./backend/EasyFrete.Api
+      dockerfile: Dockerfile
+    container_name: easyfrete-api-dev
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./.env
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Development
+      - SQLITE_PATH=/app/data/easyfrete.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+      target: dev
+    container_name: easyfrete-front-dev
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_PROXY=http://backend:5000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: easyfrete-ngrok-dev
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    command:
+      - "http"
+      - "backend:5000"
+      - "--url=${NGROK_DOMAIN}"
+    ports:
+      - "4040:4040"
+    depends_on:
+      - backend
+    restart: unless-stopped
