@@ -1,0 +1,103 @@
+# Dependencies
+node_modules/
+
+# Frontend builds and caches (React / TypeScript / Vite / Bun)
+dist/
+dist-ssr/
+build/
+coverage/
+.vite/
+.cache/
+.parcel-cache/
+.turbo/
+.eslintcache
+.tsbuildinfo
+*.tsbuildinfo
+
+# Package-manager logs and local files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+bun-debug.log*
+*.local
+
+# .NET build outputs and local tooling
+[Bb]in/
+[Oo]bj/
+.vs/
+TestResults/
+*.user
+*.rsuser
+*.suo
+*.userprefs
+*.nupkg
+*.snupkg
+packages/
+artifacts/
+publish/
+data/
+
+# .NET local secrets and development certificates
+appsettings.Local.json
+appsettings.*.Local.json
+*.pfx
+*.cer
+*.crt
+*.key
+*.pem
+
+# EF Core migrations
+/backend/EasyFrete.Api/Data/Migrations/
+
+# Databases and local database sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.mdf
+*.ndf
+*.ldf
+*.bak
+*.dump
+*.sqlitedb
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+secrets/
+*.secret
+*.secrets
+
+# IDEs and editor state
+.idea/
+.fleet/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary files and logs
+logs/
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Local data exports
+*.xlsx
+*.xls
+*.csv
