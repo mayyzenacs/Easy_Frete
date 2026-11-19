@@ -20,10 +20,13 @@ public class AppDbContext : DbContext
         {
             e.ToTable("Usuarios");
             e.HasKey(u => u.Id);
+            e.Property(u => u.Id).ValueGeneratedNever();
             e.Property(u => u.Nome).HasMaxLength(120).IsRequired();
             e.Property(u => u.Email).HasMaxLength(180).IsRequired().UseCollation("NOCASE");
             e.HasIndex(u => u.Email).IsUnique();
-            e.Property(u => u.SenhaHash).IsRequired();
+            e.Property(u => u.PasswordHash).IsRequired();
+            e.Property(u => u.Role).IsRequired();
+            e.Property(u => u.Status).IsRequired();
         });
 
         modelBuilder.Entity<Produto>(e =>
