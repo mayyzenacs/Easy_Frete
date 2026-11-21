@@ -1,4 +1,5 @@
-using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.RateLimiting;
 using EasyFrete.Api.DTOs;
 
@@ -33,7 +34,7 @@ public static class RateLimitingConfiguration
 
             options.AddPolicy(AuthPolicy, httpContext =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    GetClientIp(httpContext),
                     _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = authLimit,
@@ -43,26 +44,19 @@ public static class RateLimitingConfiguration
                     }));
 
             options.AddPolicy(ApiPolicy, httpContext =>
-            {
-                var partitionKey =
-                    httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier)
-                    ?? httpContext.Connection.RemoteIpAddress?.ToString()
-                    ?? "unknown";
-
-                return RateLimitPartition.GetFixedWindowLimiter(
-                    partitionKey,
+                RateLimitPartition.GetFixedWindowLimiter(
+                    GetClientIp(httpContext),
                     _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = apiLimit,
                         Window = TimeSpan.FromMinutes(1),
                         QueueLimit = 0,
                         AutoReplenishment = true
-                    });
-            });
+                    }));
 
             options.AddPolicy(SyncPolicy, httpContext =>
                 RateLimitPartition.GetFixedWindowLimiter(
-                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    GetSyncPartitionKey(httpContext),
                     _ => new FixedWindowRateLimiterOptions
                     {
                         PermitLimit = syncLimit,
@@ -74,4 +68,34 @@ public static class RateLimitingConfiguration
 
         return services;
     }
+
+    private static string GetClientIp(HttpContext httpContext)
+    {
+        var ip = httpContext.Connection.RemoteIpAddress;
+        if (ip is null)
+        {
+            return "unknown";
+        }
+
+        if (ip.IsIPv4MappedToIPv6)
+        {
+            ip = ip.MapToIPv4();
+        }
+
+        return ip.ToString();
+    }
+
+    private static string GetSyncPartitionKey(HttpContext httpContext)
+    {
+        var apiKey = httpContext.Request.Headers["X-Api-Key"].ToString().Trim();
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            return $"ip:{GetClientIp(httpContext)}";
+        }
+
+        var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(apiKey));
+        var shortHash = Convert.ToHexString(hashBytes)[..16];
+        return $"key:{shortHash}";
+    }
 }
+

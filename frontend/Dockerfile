@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM oven/bun:1-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
 ARG VITE_API_URL=/api/v1

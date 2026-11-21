@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="EasyFrete.Api.Tests/EasyFrete.Api.Tests.csproj" />
+  <Project Path="EasyFrete.Api/EasyFrete.Api.csproj" />
+</Solution>

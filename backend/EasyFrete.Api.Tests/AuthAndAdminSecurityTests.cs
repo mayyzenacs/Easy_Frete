@@ -209,6 +209,112 @@ public sealed class AuthAndAdminSecurityTests
         Assert.That(patch.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
+    [Test]
+    public async Task Register_InvalidPayloadOrDuplicateEmail_ReturnsExpectedErrors()
+    {
+        var emptyPayload = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+        {
+            nome = "",
+            email = "",
+            password = ""
+        });
+        Assert.That(emptyPayload.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var invalidEmail = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+        {
+            nome = "Usuario Teste",
+            email = "email-invalido",
+            password = "SenhaSegura123!"
+        });
+        Assert.That(invalidEmail.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var shortPassword = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+        {
+            nome = "Usuario Teste",
+            email = "curta@easyfrete.test",
+            password = "123"
+        });
+        Assert.That(shortPassword.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var first = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+        {
+            nome = "Usuario Duplicado",
+            email = "duplicado@easyfrete.test",
+            password = "SenhaSegura123!"
+        });
+        Assert.That(first.StatusCode, Is.EqualTo(HttpStatusCode.Created));
+
+        var duplicate = await _client.PostAsJsonAsync("/api/v1/auth/register", new
+        {
+            nome = "Outro Nome",
+            email = "DUPLICADO@easyfrete.test",
+            password = "SenhaSegura123!"
+        });
+        Assert.That(duplicate.StatusCode, Is.EqualTo(HttpStatusCode.Conflict));
+    }
+
+    [Test]
+    public async Task Login_InvalidCredentials_ReturnsUnauthorized()
+    {
+        var empty = await _client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            email = "",
+            password = ""
+        });
+        Assert.That(empty.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+
+        var unknownEmail = await _client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            email = "naoexiste@easyfrete.test",
+            password = "SenhaQualquer123!"
+        });
+        Assert.That(unknownEmail.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+
+        var wrongPassword = await _client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            email = "admin@easyfrete.test",
+            password = "SenhaErrada123!"
+        });
+        Assert.That(wrongPassword.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
+    }
+
+    [Test]
+    public async Task AdminEndpoints_ListAllAndPatchValidationErrors()
+    {
+        var adminToken = await LoginAdminAsync();
+        _client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", adminToken);
+
+        var listAll = await _client.GetAsync("/api/v1/admin/usuarios");
+        Assert.That(listAll.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using var listJson = JsonDocument.Parse(await listAll.Content.ReadAsStringAsync());
+        Assert.That(listJson.RootElement.GetArrayLength(), Is.GreaterThanOrEqualTo(1));
+
+        var notFound = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{Guid.NewGuid()}",
+            new { nome = "Inexistente" });
+        Assert.That(notFound.StatusCode, Is.EqualTo(HttpStatusCode.NotFound));
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var admin = db.Usuarios.Single(u => u.Email == "admin@easyfrete.test");
+
+        var invalidStatus = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{admin.Id}",
+            new { status = "Invalido" });
+        Assert.That(invalidStatus.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var invalidRole = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{admin.Id}",
+            new { role = "SuperAdmin" });
+        Assert.That(invalidRole.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var blankName = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{admin.Id}",
+            new { nome = "   " });
+        Assert.That(blankName.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+    }
+
     private async Task<string> LoginAdminAsync()
     {
         var login = await _client.PostAsJsonAsync("/api/v1/auth/login", new

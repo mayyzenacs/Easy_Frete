@@ -2,6 +2,7 @@ using EasyFrete.Api.Data;
 using EasyFrete.Api.Configuration;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -54,7 +55,11 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
     public new void Dispose()
     {
         base.Dispose();
-        if (File.Exists(DatabasePath))
-            File.Delete(DatabasePath);
+        SqliteConnection.ClearAllPools();
+        foreach (var path in new[] { DatabasePath, $"{DatabasePath}-wal", $"{DatabasePath}-shm" })
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 }

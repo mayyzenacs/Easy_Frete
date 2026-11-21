@@ -9,6 +9,7 @@ using EasyFrete.Api.Endpoints;
 using EasyFrete.Api.Models;
 using EasyFrete.Api.Services;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -69,7 +70,17 @@ builder.Services
         };
     });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownProxies.Clear();
+    options.KnownIPNetworks.Clear();
+    options.KnownIPNetworks.Add(System.Net.IPNetwork.Parse("172.18.0.0/16"));
+    options.ForwardLimit = 1;
+});
+
 builder.Services.AddAuthorization();
+builder.Services.AddHealthChecks();
 builder.Services.AddEasyFreteRateLimiting(builder.Environment);
 
 var app = builder.Build();
@@ -131,16 +142,19 @@ using (var scope = app.Services.CreateScope())
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 }
 
+app.UseForwardedHeaders();
+
 app.UseExceptionHandler(handler => handler.Run(async context =>
 {
     context.Response.StatusCode = StatusCodes.Status500InternalServerError;
     await context.Response.WriteAsJsonAsync(new ErrorResponse("Erro interno do servidor."));
 }));
 
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseRateLimiter();
 
+app.MapHealthChecks("/health");
 app.MapApiEndpoints();
 
 app.Run();
