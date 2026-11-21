@@ -37,7 +37,9 @@ TestResults/
 packages/
 artifacts/
 publish/
-data/
+# Dados locais do SQLite (ancorado na raiz para não casar com backend/EasyFrete.Api/Data/
+# em sistemas com core.ignorecase=true, o que ignoraria as migrations; *.db cobre o resto)
+/data/
 
 # .NET local secrets and development certificates
 appsettings.Local.json
@@ -47,9 +49,6 @@ appsettings.*.Local.json
 *.crt
 *.key
 *.pem
-
-# EF Core migrations
-/backend/EasyFrete.Api/Data/Migrations/
 
 # Databases and local database sidecar files
 *.db

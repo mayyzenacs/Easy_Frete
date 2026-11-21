@@ -1,0 +1,308 @@
+name: CI/CD — Easy Frete
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions: {}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_OWNER: mayyzenacs
+  DEPLOY_DIR: /home/deployer/nginx/sites/easyfrete
+
+jobs:
+  ci-backend:
+    name: CI Back-end (.NET 10)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('backend/**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore dependencies
+        run: dotnet restore backend/EasyFrete.slnx
+
+      - name: Run NUnit tests
+        run: dotnet test backend/EasyFrete.slnx -c Release --no-restore --verbosity normal
+
+  ci-frontend:
+    name: CI Front-end (Bun + Vite)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1"
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+
+      - name: Lint (oxlint)
+        working-directory: frontend
+        run: bun run lint
+
+      - name: Typecheck & Production Build
+        working-directory: frontend
+        env:
+          VITE_API_URL: /api/v1
+        run: bun run build
+
+  build-and-push:
+    name: Build & Push GHCR (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: [ci-backend, ci-frontend]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: api
+            image: easyfrete-api
+            context: backend
+            file: backend/EasyFrete.Api/Dockerfile
+            build_args: ""
+          - name: web
+            image: easyfrete-web
+            context: frontend
+            file: frontend/Dockerfile
+            build_args: VITE_API_URL=/api/v1
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU (arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+      - name: Build and push private arm64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false
+
+  deploy:
+    name: Deploy to Oracle VPS
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name != 'pull_request'
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            compose.prod.yml
+            deploy/nginx/sites_conf/easyfrete.conf
+            deploy/nginx/snippets/ef_proxy.conf
+          sparse-checkout-cone-mode: false
+
+      - name: Validate required secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          for var in VPS_HOST VPS_PORT VPS_USER VPS_SSH_KEY VPS_SSH_KNOWN_HOSTS GHCR_READ_TOKEN; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::Secret obrigatorio nao configurado no environment production: $var"
+              exit 1
+            fi
+          done
+
+      - name: Prepare ephemeral SSH configuration
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
+          chmod 600 "$RUNNER_TEMP/deploy_key"
+          printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          chmod 644 "$RUNNER_TEMP/known_hosts"
+
+      - name: Upload staged deployment files to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          SSH_ARGS=(-p "$VPS_PORT" -i "$RUNNER_TEMP/deploy_key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
+          SCP_ARGS=(-P "$VPS_PORT" -i "$RUNNER_TEMP/deploy_key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
+
+          ssh "${SSH_ARGS[@]}" "${VPS_USER}@${VPS_HOST}" \
+            "mkdir -p ${DEPLOY_DIR}/data /home/deployer/nginx/sites_conf /home/deployer/nginx/snippets"
+
+          scp "${SCP_ARGS[@]}" compose.prod.yml "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/compose.yml.tmp"
+          scp "${SCP_ARGS[@]}" deploy/nginx/sites_conf/easyfrete.conf "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/easyfrete.conf.tmp"
+          scp "${SCP_ARGS[@]}" deploy/nginx/snippets/ef_proxy.conf "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/ef_proxy.conf.tmp"
+
+      - name: Roll out containers and reload Nginx safely
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          REMOTE_SCRIPT=$(cat <<'EOF'
+          set -euo pipefail
+          IFS= read -r GHCR_TOKEN
+          WORK_TMP=$(mktemp -d)
+          chmod 700 "$WORK_TMP"
+
+          NGINX_CONF="/home/deployer/nginx/sites_conf/easyfrete.conf"
+          NGINX_SNIPPET="/home/deployer/nginx/snippets/ef_proxy.conf"
+          CF_SNIPPET="/home/deployer/nginx/snippets/cloudflare_realip.conf"
+
+          cleanup() {
+            rm -rf "$WORK_TMP"
+            rm -f "$DEPLOY_DIR/compose.yml.tmp" "$DEPLOY_DIR/easyfrete.conf.tmp" "$DEPLOY_DIR/ef_proxy.conf.tmp"
+          }
+          trap cleanup EXIT
+
+          cd "$DEPLOY_DIR"
+
+          if [ ! -f .env ]; then
+            echo "::error::Arquivo $DEPLOY_DIR/.env nao encontrado na VPS. Crie-o manualmente antes do deploy."
+            exit 1
+          fi
+
+          if [ ! -f "$CF_SNIPPET" ]; then
+            echo "::error::Snippet $CF_SNIPPET nao encontrado na VPS. Rode /home/deployer/nginx/update_cloudflare_ips.sh antes do deploy."
+            exit 1
+          fi
+
+          CURRENT_OWNER=$(stat -c '%u:%g' "$DEPLOY_DIR/data")
+          if [ "$CURRENT_OWNER" != "1654:1654" ]; then
+            sudo -n chown -R 1654:1654 "$DEPLOY_DIR/data"
+            sudo -n chmod 700 "$DEPLOY_DIR/data"
+          fi
+
+          docker compose -f compose.yml.tmp config --quiet
+          mv -f compose.yml.tmp compose.yml
+
+          export DOCKER_CONFIG="$WORK_TMP"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          unset GHCR_TOKEN
+
+          docker compose pull
+
+          if ! docker compose up -d --remove-orphans --wait --wait-timeout 90; then
+            echo "::error::Falha no rollout ou healthcheck dos containers."
+            docker compose ps
+            docker compose logs --tail=60
+            exit 1
+          fi
+
+          [ -f "$NGINX_CONF" ] && cp "$NGINX_CONF" "$WORK_TMP/easyfrete.conf.bak"
+          [ -f "$NGINX_SNIPPET" ] && cp "$NGINX_SNIPPET" "$WORK_TMP/ef_proxy.conf.bak"
+
+          mv -f "$DEPLOY_DIR/easyfrete.conf.tmp" "$NGINX_CONF"
+          mv -f "$DEPLOY_DIR/ef_proxy.conf.tmp" "$NGINX_SNIPPET"
+
+          if docker exec nginx_master nginx -t; then
+            docker exec nginx_master nginx -s reload
+          else
+            echo "::error::Validacao do Nginx falhou. Revertendo configs..."
+            [ -f "$WORK_TMP/easyfrete.conf.bak" ] && cp "$WORK_TMP/easyfrete.conf.bak" "$NGINX_CONF" || rm -f "$NGINX_CONF"
+            [ -f "$WORK_TMP/ef_proxy.conf.bak" ] && cp "$WORK_TMP/ef_proxy.conf.bak" "$NGINX_SNIPPET" || rm -f "$NGINX_SNIPPET"
+            exit 1
+          fi
+
+          docker compose ps
+          docker image prune -f --filter "until=168h"
+          EOF
+          )
+
+          printf '%s\n' "$GHCR_READ_TOKEN" | ssh \
+            -p "$VPS_PORT" \
+            -i "$RUNNER_TEMP/deploy_key" \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            "${VPS_USER}@${VPS_HOST}" \
+            "DEPLOY_DIR=$(printf '%q' "$DEPLOY_DIR") GHCR_USER=$(printf '%q' "$IMAGE_OWNER") bash -c $(printf '%q' "$REMOTE_SCRIPT")"
+
+      - name: Clean up ephemeral SSH files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts"
