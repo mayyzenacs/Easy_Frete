@@ -17,8 +17,6 @@ permissions: {}
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_OWNER: mayyzenacs
-  DEPLOY_DIR: /home/deployer/nginx/sites/easyfrete
 
 jobs:
   ci-backend:
@@ -29,6 +27,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -43,20 +43,22 @@ jobs:
           restore-keys: |
             nuget-${{ runner.os }}-
 
-      - name: Restore dependencies
-        run: dotnet restore backend/EasyFrete.slnx
-
       - name: Run NUnit tests
-        run: dotnet test backend/EasyFrete.slnx -c Release --no-restore --verbosity normal
+        run: dotnet test backend/EasyFrete.slnx -c Release --verbosity normal
 
   ci-frontend:
     name: CI Front-end (Bun + Vite)
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -72,44 +74,36 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Install dependencies
-        working-directory: frontend
         run: bun install --frozen-lockfile
 
       - name: Lint (oxlint)
-        working-directory: frontend
         run: bun run lint
 
       - name: Typecheck & Production Build
-        working-directory: frontend
-        env:
-          VITE_API_URL: /api/v1
         run: bun run build
 
   build-and-push:
     name: Build & Push GHCR (${{ matrix.name }})
     runs-on: ubuntu-latest
     needs: [ci-backend, ci-frontend]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     permissions:
       contents: read
       packages: write
     strategy:
-      fail-fast: true
       matrix:
         include:
           - name: api
-            image: easyfrete-api
             context: backend
             file: backend/EasyFrete.Api/Dockerfile
-            build_args: ""
           - name: web
-            image: easyfrete-web
             context: frontend
             file: frontend/Dockerfile
-            build_args: VITE_API_URL=/api/v1
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup QEMU (arm64)
         uses: docker/setup-qemu-action@v3
@@ -130,12 +124,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/${{ matrix.image }}
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/easyfrete-${{ matrix.name }}
           tags: |
             type=raw,value=latest
             type=sha,prefix=sha-,format=short
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
 
       - name: Build and push private arm64 image
         uses: docker/build-push-action@v6
@@ -146,16 +138,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: ${{ matrix.build_args }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: type=gha,scope=easyfrete-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=easyfrete-${{ matrix.name }}
           provenance: false
 
   deploy:
     name: Deploy to Oracle VPS
     runs-on: ubuntu-latest
     needs: [build-and-push]
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     environment: production
     permissions:
       contents: read
@@ -163,13 +154,14 @@ jobs:
       - name: Checkout deployment files
         uses: actions/checkout@v4
         with:
+          persist-credentials: false
           sparse-checkout: |
             compose.prod.yml
             deploy/nginx/sites_conf/easyfrete.conf
             deploy/nginx/snippets/ef_proxy.conf
           sparse-checkout-cone-mode: false
 
-      - name: Validate required secrets
+      - name: Validate secrets and configure SSH
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_PORT: ${{ secrets.VPS_PORT }}
@@ -186,40 +178,41 @@ jobs:
             fi
           done
 
-      - name: Prepare ephemeral SSH configuration
-        env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
+          if [[ ! "$VPS_PORT" =~ ^[0-9]+$ ]] || [[ ! "$VPS_HOST" =~ ^[A-Za-z0-9._:-]+$ ]] || [[ ! "$VPS_USER" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Formato invalido em VPS_HOST, VPS_PORT ou VPS_USER."
+            exit 1
+          fi
+
           umask 077
           printf '%s\n' "$VPS_SSH_KEY" > "$RUNNER_TEMP/deploy_key"
-          chmod 600 "$RUNNER_TEMP/deploy_key"
           printf '%s\n' "$VPS_SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
-          chmod 644 "$RUNNER_TEMP/known_hosts"
+          cat > "$RUNNER_TEMP/ssh_config" <<EOF
+          Host vps
+            HostName $VPS_HOST
+            Port $VPS_PORT
+            User $VPS_USER
+            IdentityFile "$RUNNER_TEMP/deploy_key"
+            IdentitiesOnly yes
+            UserKnownHostsFile "$RUNNER_TEMP/known_hosts"
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 15
+          EOF
 
       - name: Upload staged deployment files to VPS
-        env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           set -euo pipefail
-          SSH_ARGS=(-p "$VPS_PORT" -i "$RUNNER_TEMP/deploy_key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
-          SCP_ARGS=(-P "$VPS_PORT" -i "$RUNNER_TEMP/deploy_key" -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" -o BatchMode=yes -o ConnectTimeout=15)
-
-          ssh "${SSH_ARGS[@]}" "${VPS_USER}@${VPS_HOST}" \
-            "mkdir -p ${DEPLOY_DIR}/data /home/deployer/nginx/sites_conf /home/deployer/nginx/snippets"
-
-          scp "${SCP_ARGS[@]}" compose.prod.yml "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/compose.yml.tmp"
-          scp "${SCP_ARGS[@]}" deploy/nginx/sites_conf/easyfrete.conf "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/easyfrete.conf.tmp"
-          scp "${SCP_ARGS[@]}" deploy/nginx/snippets/ef_proxy.conf "${VPS_USER}@${VPS_HOST}:${DEPLOY_DIR}/ef_proxy.conf.tmp"
+          SSH_CFG="$RUNNER_TEMP/ssh_config"
+          ssh -F "$SSH_CFG" vps 'mkdir -p "$HOME/nginx/sites/easyfrete/data" "$HOME/nginx/sites/easyfrete/.staging" "$HOME/nginx/sites_conf" "$HOME/nginx/snippets"'
+          scp -F "$SSH_CFG" \
+            compose.prod.yml \
+            deploy/nginx/sites_conf/easyfrete.conf \
+            deploy/nginx/snippets/ef_proxy.conf \
+            vps:nginx/sites/easyfrete/.staging/
 
       - name: Roll out containers and reload Nginx safely
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_PORT: ${{ secrets.VPS_PORT }}
-          VPS_USER: ${{ secrets.VPS_USER }}
+          GHCR_USER: ${{ github.repository_owner }}
           GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -227,15 +220,16 @@ jobs:
           set -euo pipefail
           IFS= read -r GHCR_TOKEN
           WORK_TMP=$(mktemp -d)
-          chmod 700 "$WORK_TMP"
 
-          NGINX_CONF="/home/deployer/nginx/sites_conf/easyfrete.conf"
-          NGINX_SNIPPET="/home/deployer/nginx/snippets/ef_proxy.conf"
-          CF_SNIPPET="/home/deployer/nginx/snippets/cloudflare_realip.conf"
+          NGINX_DIR="$HOME/nginx"
+          DEPLOY_DIR="$NGINX_DIR/sites/easyfrete"
+          STAGING_DIR="$DEPLOY_DIR/.staging"
+          NGINX_CONF="$NGINX_DIR/sites_conf/easyfrete.conf"
+          NGINX_SNIPPET="$NGINX_DIR/snippets/ef_proxy.conf"
+          CF_SNIPPET="$NGINX_DIR/snippets/cloudflare_realip.conf"
 
           cleanup() {
-            rm -rf "$WORK_TMP"
-            rm -f "$DEPLOY_DIR/compose.yml.tmp" "$DEPLOY_DIR/easyfrete.conf.tmp" "$DEPLOY_DIR/ef_proxy.conf.tmp"
+            rm -rf "$WORK_TMP" "$STAGING_DIR"
           }
           trap cleanup EXIT
 
@@ -247,7 +241,7 @@ jobs:
           fi
 
           if [ ! -f "$CF_SNIPPET" ]; then
-            echo "::error::Snippet $CF_SNIPPET nao encontrado na VPS. Rode /home/deployer/nginx/update_cloudflare_ips.sh antes do deploy."
+            echo "::error::Snippet $CF_SNIPPET nao encontrado na VPS. Rode $NGINX_DIR/update_cloudflare_ips.sh antes do deploy."
             exit 1
           fi
 
@@ -257,11 +251,11 @@ jobs:
             sudo -n chmod 700 "$DEPLOY_DIR/data"
           fi
 
-          docker compose -f compose.yml.tmp config --quiet
-          mv -f compose.yml.tmp compose.yml
+          docker compose --project-directory "$DEPLOY_DIR" -f "$STAGING_DIR/compose.prod.yml" config --quiet
+          mv -f "$STAGING_DIR/compose.prod.yml" "$DEPLOY_DIR/compose.yml"
 
           export DOCKER_CONFIG="$WORK_TMP"
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          printf '%s' "$GHCR_TOKEN" | docker login "$REGISTRY" -u "$GHCR_USER" --password-stdin
           unset GHCR_TOKEN
 
           docker compose pull
@@ -273,18 +267,26 @@ jobs:
             exit 1
           fi
 
-          [ -f "$NGINX_CONF" ] && cp "$NGINX_CONF" "$WORK_TMP/easyfrete.conf.bak"
-          [ -f "$NGINX_SNIPPET" ] && cp "$NGINX_SNIPPET" "$WORK_TMP/ef_proxy.conf.bak"
+          if [ -f "$NGINX_CONF" ]; then cp "$NGINX_CONF" "$WORK_TMP/easyfrete.conf.bak"; fi
+          if [ -f "$NGINX_SNIPPET" ]; then cp "$NGINX_SNIPPET" "$WORK_TMP/ef_proxy.conf.bak"; fi
 
-          mv -f "$DEPLOY_DIR/easyfrete.conf.tmp" "$NGINX_CONF"
-          mv -f "$DEPLOY_DIR/ef_proxy.conf.tmp" "$NGINX_SNIPPET"
+          mv -f "$STAGING_DIR/easyfrete.conf" "$NGINX_CONF"
+          mv -f "$STAGING_DIR/ef_proxy.conf" "$NGINX_SNIPPET"
 
           if docker exec nginx_master nginx -t; then
             docker exec nginx_master nginx -s reload
           else
             echo "::error::Validacao do Nginx falhou. Revertendo configs..."
-            [ -f "$WORK_TMP/easyfrete.conf.bak" ] && cp "$WORK_TMP/easyfrete.conf.bak" "$NGINX_CONF" || rm -f "$NGINX_CONF"
-            [ -f "$WORK_TMP/ef_proxy.conf.bak" ] && cp "$WORK_TMP/ef_proxy.conf.bak" "$NGINX_SNIPPET" || rm -f "$NGINX_SNIPPET"
+            if [ -f "$WORK_TMP/easyfrete.conf.bak" ]; then
+              cp "$WORK_TMP/easyfrete.conf.bak" "$NGINX_CONF"
+            else
+              rm -f "$NGINX_CONF"
+            fi
+            if [ -f "$WORK_TMP/ef_proxy.conf.bak" ]; then
+              cp "$WORK_TMP/ef_proxy.conf.bak" "$NGINX_SNIPPET"
+            else
+              rm -f "$NGINX_SNIPPET"
+            fi
             exit 1
           fi
 
@@ -293,16 +295,9 @@ jobs:
           EOF
           )
 
-          printf '%s\n' "$GHCR_READ_TOKEN" | ssh \
-            -p "$VPS_PORT" \
-            -i "$RUNNER_TEMP/deploy_key" \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$RUNNER_TEMP/known_hosts" \
-            -o BatchMode=yes \
-            -o ConnectTimeout=15 \
-            "${VPS_USER}@${VPS_HOST}" \
-            "DEPLOY_DIR=$(printf '%q' "$DEPLOY_DIR") GHCR_USER=$(printf '%q' "$IMAGE_OWNER") bash -c $(printf '%q' "$REMOTE_SCRIPT")"
+          printf '%s\n' "$GHCR_READ_TOKEN" | ssh -F "$RUNNER_TEMP/ssh_config" vps \
+            "REGISTRY=$(printf '%q' "$REGISTRY") GHCR_USER=$(printf '%q' "$GHCR_USER") bash -c $(printf '%q' "$REMOTE_SCRIPT")"
 
       - name: Clean up ephemeral SSH files
         if: always()
-        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts"
+        run: rm -f "$RUNNER_TEMP/deploy_key" "$RUNNER_TEMP/known_hosts" "$RUNNER_TEMP/ssh_config"
