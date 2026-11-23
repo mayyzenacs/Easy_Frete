@@ -142,11 +142,13 @@ public sealed class AuthAndAdminSecurityTests
         {
             Assert.That(Guid.TryParse(item.GetProperty("id").GetString(), out var listedId), Is.True);
             Assert.That(listedId, Is.Not.EqualTo(Guid.Empty));
+            Assert.That(item.TryGetProperty("criadoEm", out var criadoEmProp), Is.True);
+            Assert.That(DateTime.TryParse(criadoEmProp.GetString(), out _), Is.True);
         }
 
         var rename = await _client.PatchAsJsonAsync(
             $"/api/v1/admin/usuarios/{candidato.Id}",
-            new { nome = "Nome Atualizado" });
+            new { nome = "Nome Atualizado", email = "candidato.novo@easyfrete.test" });
         Assert.That(rename.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
         var promote = await _client.PatchAsJsonAsync(
@@ -156,7 +158,7 @@ public sealed class AuthAndAdminSecurityTests
 
         var login = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
-            email = "candidato@easyfrete.test",
+            email = "candidato.novo@easyfrete.test",
             password = "SenhaSegura123!"
         });
         Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
@@ -313,6 +315,16 @@ public sealed class AuthAndAdminSecurityTests
             $"/api/v1/admin/usuarios/{admin.Id}",
             new { nome = "   " });
         Assert.That(blankName.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var invalidEmail = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{admin.Id}",
+            new { email = "sdjasdjsaodasdao" });
+        Assert.That(invalidEmail.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
+        var changePrimaryAdminEmail = await _client.PatchAsJsonAsync(
+            $"/api/v1/admin/usuarios/{admin.Id}",
+            new { email = "outro-admin@easyfrete.test" });
+        Assert.That(changePrimaryAdminEmail.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
     private async Task<string> LoginAdminAsync()

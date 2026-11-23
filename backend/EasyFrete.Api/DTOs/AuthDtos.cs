@@ -8,4 +8,6 @@ public sealed record UsuarioResumoDto(Guid Id, string Nome, string Email, string
 
 public sealed record LoginResponse(string Token, UsuarioResumoDto Usuario);
 
-public sealed record AdminUsuarioPatchRequest(string? Nome, string? Status, string? Role);
+public sealed record AdminUsuarioPatchRequest(string? Nome, string? Status, string? Role, string? Email = null);
+
+public sealed record AdminUsuarioDto(Guid Id, string Nome, string Email, string Role, string Status, DateTime CriadoEm);
