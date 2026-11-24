@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { AccountModal } from "./components/AccountModal";
 import { AdminPanel } from "./components/AdminPanel";
 import { AuthScreen } from "./components/AuthScreen";
@@ -6,17 +6,49 @@ import { MagaluCalculator } from "./components/MagaluCalculator";
 import { Navbar } from "./components/Navbar";
 import { useAuth } from "./hooks/useAuth";
 import { createApiClient } from "./services/api";
-import type { ActiveView } from "./types";
+import type { ActiveView, AdminTab, NotificacaoItem } from "./types";
+import { isAdminOrMaster } from "./utils/formatters";
+
+const readResetTokenFromUrl = (): string | null => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const raw = params.get("reset")?.trim();
+    return raw && raw.length > 0 ? raw : null;
+  } catch {
+    return null;
+  }
+};
+
+const clearResetTokenFromUrl = () => {
+  try {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("reset")) {
+      url.searchParams.delete("reset");
+      window.history.replaceState({}, "", url.pathname + url.search + url.hash);
+    }
+  } catch {
+    // Ignora caso history.replaceState não esteja disponível
+  }
+};
 
 export default function App() {
   const { token, user, login, logout, updateUserDisplay } = useAuth();
   const [activeView, setActiveView] = useState<ActiveView>("frete");
+  const [adminTab, setAdminTab] = useState<AdminTab>("users");
   const [accountModalOpen, setAccountModalOpen] = useState(false);
+  const [resetToken, setResetToken] = useState<string | null>(
+    readResetTokenFromUrl,
+  );
+  const [notificacoes, setNotificacoes] = useState<NotificacaoItem[]>([]);
+  const [naoLidas, setNaoLidas] = useState(0);
 
   const handleLogout = useCallback(() => {
     logout();
     setActiveView("frete");
+    setAdminTab("users");
     setAccountModalOpen(false);
+    setNotificacoes([]);
+    setNaoLidas(0);
   }, [logout]);
 
   const api = useMemo(
@@ -24,8 +56,92 @@ export default function App() {
     [token, handleLogout],
   );
 
-  if (!token || !user) {
-    return <AuthScreen api={api} onAuthenticated={login} />;
+  const canAccessAdmin = Boolean(token && user && isAdminOrMaster(user.role));
+
+  const refreshNotifications = useCallback(async () => {
+    if (!canAccessAdmin) return;
+    const result = await api.listNotificacoes();
+    if (result.ok) {
+      setNotificacoes(Array.isArray(result.data.itens) ? result.data.itens : []);
+      setNaoLidas(typeof result.data.naoLidas === "number" ? result.data.naoLidas : 0);
+    }
+  }, [api, canAccessAdmin]);
+
+  useEffect(() => {
+    if (!canAccessAdmin) return;
+    let cancelled = false;
+
+    const carregar = async () => {
+      const result = await api.listNotificacoes();
+      if (cancelled || !result.ok) return;
+      setNotificacoes(
+        Array.isArray(result.data.itens) ? result.data.itens : [],
+      );
+      setNaoLidas(
+        typeof result.data.naoLidas === "number" ? result.data.naoLidas : 0,
+      );
+    };
+
+    void carregar();
+
+    const interval = window.setInterval(() => {
+      void carregar();
+    }, 60_000);
+    const onFocus = () => {
+      void carregar();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [api, canAccessAdmin]);
+
+  const handleOpenNotification = useCallback(
+    (notif: NotificacaoItem) => {
+      if (!notif.lida) {
+        setNotificacoes((prev) =>
+          prev.map((item) =>
+            item.id === notif.id ? { ...item, lida: true } : item,
+          ),
+        );
+        setNaoLidas((prev) => Math.max(0, prev - 1));
+        void api.marcarNotificacaoLida(notif.id);
+      }
+
+      const targetTab: AdminTab =
+        notif.tipo === "CadastroPendente" ? "pending" : "deletions";
+      setAdminTab(targetTab);
+      setActiveView("admin");
+    },
+    [api],
+  );
+
+  const handleMarkAllRead = useCallback(async () => {
+    setNotificacoes((prev) => prev.map((item) => ({ ...item, lida: true })));
+    setNaoLidas(0);
+    await api.marcarTodasNotificacoesLidas();
+  }, [api]);
+
+  const handleClearResetToken = useCallback(() => {
+    clearResetTokenFromUrl();
+    setResetToken(null);
+  }, []);
+
+  if (!token || !user || resetToken) {
+    return (
+      <AuthScreen
+        key={resetToken ?? "auth"}
+        api={api}
+        initialResetToken={resetToken}
+        onClearResetToken={handleClearResetToken}
+        onAuthenticated={(jwt, displayFallback) => {
+          handleClearResetToken();
+          return login(jwt, displayFallback);
+        }}
+      />
+    );
   }
 
   return (
@@ -33,7 +149,11 @@ export default function App() {
       <Navbar
         user={user}
         activeView={activeView}
+        notificacoes={notificacoes}
+        naoLidas={naoLidas}
         onSelectView={setActiveView}
+        onOpenNotification={handleOpenNotification}
+        onMarkAllRead={() => void handleMarkAllRead()}
         onOpenAccount={() => setAccountModalOpen(true)}
         onLogout={handleLogout}
       />
@@ -43,8 +163,11 @@ export default function App() {
           <AdminPanel
             api={api}
             currentUser={user}
+            activeTab={adminTab}
+            onChangeTab={setAdminTab}
             onBackToCalculator={() => setActiveView("frete")}
             onUpdateOwnDisplay={updateUserDisplay}
+            onRefreshNotifications={() => void refreshNotifications()}
           />
         ) : (
           <MagaluCalculator api={api} />

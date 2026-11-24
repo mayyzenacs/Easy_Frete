@@ -1,5 +1,6 @@
-using EasyFrete.Api.Data;
 using EasyFrete.Api.Configuration;
+using EasyFrete.Api.Data;
+using EasyFrete.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -9,10 +10,56 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace EasyFrete.Api.Tests;
 
+public sealed record CapturedResetEmail(string ToEmail, string ToName, string ResetUrl, int ExpiresInMinutes);
+
+public sealed class FakePasswordResetEmailSender : IPasswordResetEmailSender
+{
+    private readonly List<CapturedResetEmail> _sent = [];
+
+    public bool IsConfigured { get; set; } = true;
+    public bool ThrowOnSend { get; set; }
+    public IReadOnlyList<CapturedResetEmail> SentEmails => _sent;
+
+    public void Clear() => _sent.Clear();
+
+    public Task SendPasswordResetEmailAsync(
+        string toEmail,
+        string toName,
+        string resetUrl,
+        int expiresInMinutes,
+        CancellationToken ct)
+    {
+        if (ThrowOnSend)
+        {
+            throw new IOException("Falha simulada de SMTP.");
+        }
+
+        _sent.Add(new CapturedResetEmail(toEmail, toName, resetUrl, expiresInMinutes));
+        return Task.CompletedTask;
+    }
+}
+
+public sealed class AdjustableTimeProvider : TimeProvider
+{
+    private DateTimeOffset _utcNow;
+
+    public AdjustableTimeProvider(DateTimeOffset? start = null)
+    {
+        _utcNow = start ?? DateTimeOffset.UtcNow;
+    }
+
+    public override DateTimeOffset GetUtcNow() => _utcNow;
+
+    public void Advance(TimeSpan delta) => _utcNow = _utcNow.Add(delta);
+}
+
 public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, IDisposable
 {
     public string DatabasePath { get; } =
         Path.Combine(Path.GetTempPath(), $"easyfrete-tests-{Guid.NewGuid():N}.db");
+
+    public FakePasswordResetEmailSender EmailSender { get; } = new();
+    public AdjustableTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 11, 24, 20, 0, 0, TimeSpan.Zero));
 
     public TestWebApplicationFactory()
     {
@@ -25,6 +72,7 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
         Environment.SetEnvironmentVariable("EXTERNAL_CALC_API_KEY", "external-test-key");
         Environment.SetEnvironmentVariable("SYNC_API_KEY", "sync-test-key");
         Environment.SetEnvironmentVariable("SQLITE_PATH", DatabasePath);
+        Environment.SetEnvironmentVariable("FRONTEND_BASE_URL", "https://easyfrete.test");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -35,6 +83,8 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
             services.RemoveAll<ApiSettings>();
+            services.RemoveAll<IPasswordResetEmailSender>();
+            services.RemoveAll<TimeProvider>();
 
             services.AddDbContext<AppDbContext>(options =>
                 options.UseSqlite($"Data Source={DatabasePath}"));
@@ -47,8 +97,14 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
                 JwtAudience = "easyfrete-web",
                 ExternalCalcApiKey = "external-test-key",
                 SyncApiKey = "sync-test-key",
-                SqlitePath = DatabasePath
+                SqlitePath = DatabasePath,
+                FrontendBaseUrl = "https://easyfrete.test",
+                PasswordResetTokenMinutes = 30,
+                PasswordResetMaxAttempts = 2,
+                PasswordResetLockoutHours = 24
             });
+            services.AddSingleton<IPasswordResetEmailSender>(EmailSender);
+            services.AddSingleton<TimeProvider>(Clock);
         });
     }
 

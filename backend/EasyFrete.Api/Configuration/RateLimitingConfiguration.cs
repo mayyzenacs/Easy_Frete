@@ -8,6 +8,7 @@ namespace EasyFrete.Api.Configuration;
 public static class RateLimitingConfiguration
 {
     public const string AuthPolicy = "AuthPolicy";
+    public const string PasswordResetPolicy = "PasswordResetPolicy";
     public const string ApiPolicy = "ApiPolicy";
     public const string SyncPolicy = "SyncPolicy";
 
@@ -17,6 +18,7 @@ public static class RateLimitingConfiguration
     {
         var isTesting = environment.IsEnvironment("Testing");
         var authLimit = isTesting ? 10_000 : 10;
+        var passwordResetIpLimit = isTesting ? 10_000 : 8;
         var apiLimit = isTesting ? 10_000 : 60;
         var syncLimit = isTesting ? 10_000 : 120;
 
@@ -39,6 +41,18 @@ public static class RateLimitingConfiguration
                     {
                         PermitLimit = authLimit,
                         Window = TimeSpan.FromMinutes(1),
+                        QueueLimit = 0,
+                        AutoReplenishment = true
+                    }));
+
+            // Camada extra por IP para o endpoint de esqueci minha senha (complementa o bloqueio persistente 2x/24h por e-mail)
+            options.AddPolicy(PasswordResetPolicy, httpContext =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    GetClientIp(httpContext),
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = passwordResetIpLimit,
+                        Window = TimeSpan.FromHours(1),
                         QueueLimit = 0,
                         AutoReplenishment = true
                     }));
@@ -98,4 +112,3 @@ public static class RateLimitingConfiguration
         return $"key:{shortHash}";
     }
 }
-

@@ -39,10 +39,10 @@ const firstNonEmptyString = (...values: unknown[]): string => {
 
 const extractRoleFromClaim = (rawRole: unknown): RoleType => {
   if (Array.isArray(rawRole)) {
-    const isAdmin = rawRole.some(
-      (entry) => String(entry).toLowerCase() === "admin",
-    );
-    return isAdmin ? "Admin" : "User";
+    const normalized = rawRole.map((entry) => String(entry).toLowerCase());
+    if (normalized.includes("master")) return "Master";
+    if (normalized.includes("admin")) return "Admin";
+    return "User";
   }
   return normalizarRole(rawRole);
 };

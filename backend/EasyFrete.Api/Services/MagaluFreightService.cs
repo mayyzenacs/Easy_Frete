@@ -1,3 +1,4 @@
+using System.Globalization;
 using EasyFrete.Api.Data;
 using EasyFrete.Api.DTOs;
 using Microsoft.EntityFrameworkCore;
@@ -11,10 +12,7 @@ public interface IMagaluFreightService
 
 public sealed class MagaluFreightService : IMagaluFreightService
 {
-    public const decimal TaxaFixaObrigatoria = 5.00m;
-    private const decimal LimiteTabela = 79.00m;
-    private const decimal LimiteAcima199 = 199.00m;
-    private const decimal DivisorCubagem = 6000m;
+    private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
 
     private readonly AppDbContext _db;
 
@@ -35,6 +33,15 @@ public sealed class MagaluFreightService : IMagaluFreightService
             return FreightCalculationResult.Fail(400, "Peso e medidas não podem ser negativos.");
         }
 
+        var config = await _db.ConfiguracoesMagalu
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == 1, ct);
+
+        if (config is null)
+        {
+            return FreightCalculationResult.Fail(500, "Configuração de tarifas Magalu não carregada.");
+        }
+
         var pesoReal = request.PesoRealKg;
         var comprimento = request.ComprimentoCm;
         var largura = request.LarguraCm;
@@ -44,6 +51,7 @@ public sealed class MagaluFreightService : IMagaluFreightService
         string? skuResposta = string.IsNullOrEmpty(sku) ? null : sku;
         string? nome = null;
         var origemMedidas = "REQUEST";
+        var preco = request.PrecoProduto;
 
         // 1. Busca de medidas no cadastro (case-insensitive via collation NOCASE da coluna Sku)
         var faltaMedida = pesoReal <= 0m || comprimento <= 0m || largura <= 0m || altura <= 0m;
@@ -55,39 +63,47 @@ public sealed class MagaluFreightService : IMagaluFreightService
 
             if (produto is null)
             {
-                return FreightCalculationResult.Fail(404, $"SKU '{sku}' não encontrado e medidas não informadas.");
+                if (preco >= config.LimiteTabela)
+                {
+                    return FreightCalculationResult.Fail(404, $"SKU '{sku}' não encontrado e medidas não informadas.");
+                }
             }
+            else
+            {
+                if (pesoReal <= 0m) pesoReal = produto.PesoRealKg;
+                if (comprimento <= 0m) comprimento = produto.ComprimentoCm;
+                if (largura <= 0m) largura = produto.LarguraCm;
+                if (altura <= 0m) altura = produto.AlturaCm;
 
-            if (pesoReal <= 0m) pesoReal = produto.PesoRealKg;
-            if (comprimento <= 0m) comprimento = produto.ComprimentoCm;
-            if (largura <= 0m) largura = produto.LarguraCm;
-            if (altura <= 0m) altura = produto.AlturaCm;
-
-            skuResposta = produto.Sku;
-            nome = produto.Nome;
-            origemMedidas = "SKU_CADASTRO";
+                skuResposta = produto.Sku;
+                nome = produto.Nome;
+                origemMedidas = "SKU_CADASTRO";
+            }
         }
 
         // 2. Peso cubado  3. Real vs Cubado
-        var pesoCubado = Math.Round((comprimento * largura * altura) / DivisorCubagem, 3);
+        var pesoCubado = Math.Round((comprimento * largura * altura) / config.DivisorCubagem, 3);
         var pesoConsiderado = Math.Max(pesoReal, pesoCubado);
         var maiorPesoTipo = pesoCubado > pesoReal ? "CUBADO" : "REAL";
 
         // 4. Tarifação
-        var preco = request.PrecoProduto;
         decimal tarifaBase;
         string faixaPrecoAplicada;
         string? faixaAplicada = null;
         string modalidadeAplicada;
         string regra;
 
-        if (preco < LimiteTabela)
+        if (preco < config.LimiteTabela)
         {
-            var percentual = request.IsFulfillment ? 0.03m : 0.04m;
-            tarifaBase = Math.Round(preco * percentual, 2);
-            faixaPrecoAplicada = "Abaixo de R$ 79,00";
-            modalidadeAplicada = request.IsFulfillment ? "Fulfillment (3%)" : "Coleta e Entrega (4%)";
-            regra = request.IsFulfillment ? "PERCENTUAL_FULFILLMENT_3" : "PERCENTUAL_COLETA_ENTREGA_4";
+            var percentualConfig = request.IsFulfillment
+                ? config.PercentualAbaixoLimiteFulfillment
+                : config.PercentualAbaixoLimiteColeta;
+            tarifaBase = Math.Round(preco * (percentualConfig / 100m), 2);
+            faixaPrecoAplicada = $"Abaixo de {FormatBrl(config.LimiteTabela)}";
+            modalidadeAplicada = request.IsFulfillment
+                ? $"Fulfillment ({FormatPercent(percentualConfig)}%)"
+                : $"Coleta e Entrega ({FormatPercent(percentualConfig)}%)";
+            regra = request.IsFulfillment ? "PERCENTUAL_FULFILLMENT" : "PERCENTUAL_COLETA_ENTREGA";
         }
         else
         {
@@ -95,10 +111,10 @@ public sealed class MagaluFreightService : IMagaluFreightService
             {
                 return FreightCalculationResult.Fail(
                     400,
-                    "Para preço a partir de R$ 79,00 informe peso/medidas ou um SKU cadastrado.");
+                    $"Para preço a partir de {FormatBrl(config.LimiteTabela)} informe peso/medidas ou um SKU cadastrado.");
             }
 
-            // SQLite não ordena/compara decimal no servidor: a tabela tem 27 linhas, então filtramos em memória.
+            // SQLite não ordena/compara decimal no servidor: filtramos a tabela em memória.
             var tarifas = await _db.TarifasMagalu.AsNoTracking().ToListAsync(ct);
             if (tarifas.Count == 0)
             {
@@ -110,35 +126,39 @@ public sealed class MagaluFreightService : IMagaluFreightService
                 .FirstOrDefault(t => pesoConsiderado <= t.PesoMaxKg)
                 ?? tarifas.OrderByDescending(t => t.PesoMaxKg).First();
 
-            var acima199 = preco > LimiteAcima199;
+            var acimaLimiteSuperior = preco > config.LimiteAcima199;
 
             if (request.IsFulfillment)
             {
-                tarifaBase = acima199 ? faixa.Acima199Fulfillment : faixa.De79a199Fulfillment;
+                tarifaBase = acimaLimiteSuperior ? faixa.Acima199Fulfillment : faixa.De79a199Fulfillment;
             }
             else if (request.ReputacaoMaior97)
             {
-                tarifaBase = acima199 ? faixa.Acima199ComDesconto97 : faixa.De79a199ComDesconto97;
+                tarifaBase = acimaLimiteSuperior ? faixa.Acima199ComDesconto97 : faixa.De79a199ComDesconto97;
             }
             else
             {
-                tarifaBase = acima199 ? faixa.Acima199SemDesconto : faixa.De79a199SemDesconto;
+                tarifaBase = acimaLimiteSuperior ? faixa.Acima199SemDesconto : faixa.De79a199SemDesconto;
             }
 
             var modalidade = request.IsFulfillment
                 ? "FULFILLMENT"
-                : request.ReputacaoMaior97 ? "REPUTACAO_MAIOR_97" : "SEM_DESCONTO";
+                : request.ReputacaoMaior97 ? "REPUTACAO_COM_DESCONTO" : "SEM_DESCONTO";
 
-            faixaPrecoAplicada = acima199 ? "Acima de R$ 199,00" : "R$ 79,00 – R$ 199,00";
+            faixaPrecoAplicada = acimaLimiteSuperior
+                ? $"Acima de {FormatBrl(config.LimiteAcima199)}"
+                : $"{FormatBrl(config.LimiteTabela)} – {FormatBrl(config.LimiteAcima199)}";
             faixaAplicada = faixa.DescricaoFaixa;
             modalidadeAplicada = request.IsFulfillment
                 ? "Fulfillment"
-                : request.ReputacaoMaior97 ? "Reputação > 97%" : "Sem desconto";
-            regra = $"TABELA_{modalidade}_{(acima199 ? "ACIMA_199" : "79_A_199")}";
+                : request.ReputacaoMaior97
+                    ? $"Reputação > {FormatPercent(config.PercentualReputacaoMinima)}%"
+                    : "Sem desconto";
+            regra = $"TABELA_{modalidade}_{(acimaLimiteSuperior ? "FAIXA_SUPERIOR" : "FAIXA_INTERMEDIARIA")}";
         }
 
         // 5. Taxa fixa e resultado final (nunca soma o preço do produto)
-        var valorFinal = Math.Round(tarifaBase + TaxaFixaObrigatoria, 2);
+        var valorFinal = Math.Round(tarifaBase + config.TaxaFixaObrigatoria, 2);
 
         var response = new CalcularFreteResponse(
             Sku: skuResposta,
@@ -159,7 +179,7 @@ public sealed class MagaluFreightService : IMagaluFreightService
             ModalidadeAplicada: modalidadeAplicada,
             RegraAplicada: regra,
             TarifaBase: Money(tarifaBase),
-            TaxaFixaObrigatoria: Money(TaxaFixaObrigatoria),
+            TaxaFixaObrigatoria: Money(config.TaxaFixaObrigatoria),
             ValorFinalFrete: Money(valorFinal));
 
         return FreightCalculationResult.Ok(response);
@@ -170,4 +190,11 @@ public sealed class MagaluFreightService : IMagaluFreightService
 
     // Garante no mínimo 1 casa (20 -> 20.0).
     private static decimal Measure(decimal valor) => Math.Round(valor, 3) + 0.0m;
+
+    private static string FormatBrl(decimal valor) => string.Create(PtBr, $"R$ {valor:N2}");
+
+    private static string FormatPercent(decimal valor) =>
+        valor % 1m == 0m
+            ? ((int)valor).ToString(PtBr)
+            : valor.ToString("0.##", PtBr);
 }
