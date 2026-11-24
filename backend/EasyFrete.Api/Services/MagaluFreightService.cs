@@ -12,7 +12,12 @@ public interface IMagaluFreightService
 
 public sealed class MagaluFreightService : IMagaluFreightService
 {
-    private static readonly CultureInfo PtBr = CultureInfo.GetCultureInfo("pt-BR");
+    private static readonly NumberFormatInfo PtBrNumberFormat = new()
+    {
+        NumberDecimalSeparator = ",",
+        NumberGroupSeparator = ".",
+        NumberGroupSizes = [3]
+    };
 
     private readonly AppDbContext _db;
 
@@ -191,10 +196,10 @@ public sealed class MagaluFreightService : IMagaluFreightService
     // Garante no mínimo 1 casa (20 -> 20.0).
     private static decimal Measure(decimal valor) => Math.Round(valor, 3) + 0.0m;
 
-    private static string FormatBrl(decimal valor) => string.Create(PtBr, $"R$ {valor:N2}");
+    private static string FormatBrl(decimal valor) => string.Create(PtBrNumberFormat, $"R$ {valor:N2}");
 
     private static string FormatPercent(decimal valor) =>
         valor % 1m == 0m
-            ? ((int)valor).ToString(PtBr)
-            : valor.ToString("0.##", PtBr);
+            ? ((int)valor).ToString(PtBrNumberFormat)
+            : valor.ToString("0.##", PtBrNumberFormat);
 }
