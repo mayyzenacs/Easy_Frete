@@ -17,6 +17,105 @@ namespace EasyFrete.Api.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
 
+            modelBuilder.Entity("EasyFrete.Api.Models.ConfiguracaoMagalu", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("AtualizadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("DivisorCubagem")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("LimiteAcima199")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("LimiteTabela")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PercentualAbaixoLimiteColeta")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PercentualAbaixoLimiteFulfillment")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PercentualReputacaoMinima")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("TaxaFixaObrigatoria")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ConfiguracoesMagalu", (string)null);
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.ControleEnvioRedefinicao", b =>
+                {
+                    b.Property<string>("EmailHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("BloqueadoAteEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("PrimeiraTentativaEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TentativasNaJanela")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UltimaTentativaEm")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("EmailHash");
+
+                    b.ToTable("ControlesEnvioRedefinicao", (string)null);
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.Notificacao", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("DestinatarioId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Lida")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("LidaEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Mensagem")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ReferenciaId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Tipo")
+                        .IsRequired()
+                        .HasMaxLength(48)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Titulo")
+                        .IsRequired()
+                        .HasMaxLength(140)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DestinatarioId", "Lida", "CriadoEm");
+
+                    b.ToTable("Notificacoes", (string)null);
+                });
+
             modelBuilder.Entity("EasyFrete.Api.Models.Produto", b =>
                 {
                     b.Property<string>("Sku")
@@ -50,6 +149,68 @@ namespace EasyFrete.Api.Data.Migrations
                     b.HasKey("Sku");
 
                     b.ToTable("Produtos", (string)null);
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.SolicitacaoExclusao", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DecididoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("DecididoPorId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DecididoPorNome")
+                        .HasMaxLength(120)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Motivo")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ObservacaoDecisao")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("SolicitadoPorId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SolicitadoPorNome")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UsuarioAlvoEmail")
+                        .IsRequired()
+                        .HasMaxLength(180)
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("UsuarioAlvoId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UsuarioAlvoNome")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SolicitadoPorId", "CriadoEm");
+
+                    b.HasIndex("UsuarioAlvoId", "Status");
+
+                    b.ToTable("SolicitacoesExclusao", (string)null);
                 });
 
             modelBuilder.Entity("EasyFrete.Api.Models.TarifaMagalu", b =>
@@ -91,6 +252,41 @@ namespace EasyFrete.Api.Data.Migrations
                     b.ToTable("TarifasMagalu", (string)null);
                 });
 
+            modelBuilder.Entity("EasyFrete.Api.Models.TokenRedefinicaoSenha", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CriadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiraEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevogadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UsadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UsuarioId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UsuarioId", "CriadoEm");
+
+                    b.ToTable("TokensRedefinicaoSenha", (string)null);
+                });
+
             modelBuilder.Entity("EasyFrete.Api.Models.Usuario", b =>
                 {
                     b.Property<Guid>("Id")
@@ -119,10 +315,19 @@ namespace EasyFrete.Api.Data.Migrations
 
                     b.Property<string>("Role")
                         .IsRequired()
+                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("SecurityStamp")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("legacy-stamp");
 
                     b.Property<string>("Status")
                         .IsRequired()
+                        .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -131,6 +336,28 @@ namespace EasyFrete.Api.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Usuarios", (string)null);
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.Notificacao", b =>
+                {
+                    b.HasOne("EasyFrete.Api.Models.Usuario", "Destinatario")
+                        .WithMany()
+                        .HasForeignKey("DestinatarioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Destinatario");
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.TokenRedefinicaoSenha", b =>
+                {
+                    b.HasOne("EasyFrete.Api.Models.Usuario", "Usuario")
+                        .WithMany()
+                        .HasForeignKey("UsuarioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Usuario");
                 });
 #pragma warning restore 612, 618
         }

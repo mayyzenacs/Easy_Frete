@@ -1,6 +1,6 @@
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using System.Security.Claims;
 using DotNetEnv;
 using EasyFrete.Api.Configuration;
 using EasyFrete.Api.Data;
@@ -40,8 +40,10 @@ if (!string.IsNullOrEmpty(dbDir))
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton(settings);
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 builder.Services.AddScoped<IMagaluFreightService, MagaluFreightService>();
+builder.Services.AddScoped<IPasswordResetEmailSender, MailKitPasswordResetEmailSender>();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -67,6 +69,40 @@ builder.Services
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(settings.JwtSecret)),
             ValidAlgorithms = new[] { SecurityAlgorithms.HmacSha256 },
             ClockSkew = TimeSpan.FromMinutes(1)
+        };
+
+        // Revogação imediata de JWT quando a conta é excluída, rejeitada, alterada de role ou redefine a senha
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var idClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);
+                var roleClaim = context.Principal?.FindFirstValue(ClaimTypes.Role);
+                var stampClaim = context.Principal?.FindFirstValue("sst");
+
+                if (!Guid.TryParse(idClaim, out var userId) ||
+                    string.IsNullOrWhiteSpace(roleClaim) ||
+                    string.IsNullOrWhiteSpace(stampClaim))
+                {
+                    context.Fail("Sessão inválida.");
+                    return;
+                }
+
+                var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var usuario = await db.Usuarios
+                    .AsNoTracking()
+                    .Where(u => u.Id == userId)
+                    .Select(u => new { u.Role, u.Status, u.SecurityStamp })
+                    .FirstOrDefaultAsync(context.HttpContext.RequestAborted);
+
+                if (usuario is null ||
+                    usuario.Status != UserStatuses.Aprovado ||
+                    !string.Equals(usuario.Role, roleClaim, StringComparison.Ordinal) ||
+                    !string.Equals(usuario.SecurityStamp, stampClaim, StringComparison.Ordinal))
+                {
+                    context.Fail("Sessão revogada. Faça login novamente.");
+                }
+            }
         };
     });
 
@@ -98,46 +134,73 @@ using (var scope = app.Services.CreateScope())
 
     db.Database.Migrate();
 
-    var adminEmail = settings.AdminEmail.Trim().ToLowerInvariant();
-    var admin = await db.Usuarios.FirstOrDefaultAsync(u => u.Email == adminEmail);
+    var masterEmail = settings.NormalizedAdminEmail;
     var passwordHasher = new PasswordHasher<Usuario>();
 
-    if (admin is null)
+    // Garante que apenas a conta configurada em ADMIN_EMAIL possua a role Master
+    var outrosMasters = await db.Usuarios
+        .Where(u => u.Role == UserRoles.Master && u.Email != masterEmail)
+        .ToListAsync();
+    foreach (var antigo in outrosMasters)
     {
-        admin = new Usuario
+        antigo.Role = UserRoles.Admin;
+        antigo.SecurityStamp = Guid.NewGuid().ToString("N");
+        antigo.AtualizadoEm = DateTime.UtcNow;
+    }
+
+    var master = await db.Usuarios.FirstOrDefaultAsync(u => u.Email == masterEmail);
+    if (master is null)
+    {
+        master = new Usuario
         {
             Nome = "Administrador",
-            Email = adminEmail,
-            Role = "Admin",
-            Status = "Aprovado",
+            Email = masterEmail,
+            Role = UserRoles.Master,
+            Status = UserStatuses.Aprovado,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
             CriadoEm = DateTime.UtcNow
         };
-        admin.PasswordHash = passwordHasher.HashPassword(admin, settings.AdminPassword);
-        db.Usuarios.Add(admin);
-        await db.SaveChangesAsync();
+        master.PasswordHash = passwordHasher.HashPassword(master, settings.AdminPassword);
+        db.Usuarios.Add(master);
     }
     else
     {
         var verify = passwordHasher.VerifyHashedPassword(
-            admin, admin.PasswordHash, settings.AdminPassword);
-        var changed = verify != PasswordVerificationResult.Success &&
-                      verify != PasswordVerificationResult.SuccessRehashNeeded;
+            master, master.PasswordHash, settings.AdminPassword);
+        var passwordChanged = verify != PasswordVerificationResult.Success &&
+                              verify != PasswordVerificationResult.SuccessRehashNeeded;
 
-        if (changed)
+        if (passwordChanged)
         {
-            admin.PasswordHash =
-                passwordHasher.HashPassword(admin, settings.AdminPassword);
+            master.PasswordHash = passwordHasher.HashPassword(master, settings.AdminPassword);
+            master.SecurityStamp = Guid.NewGuid().ToString("N");
+            master.AtualizadoEm = DateTime.UtcNow;
         }
 
-        if (admin.Role != "Admin" || admin.Status != "Aprovado")
+        if (master.Role != UserRoles.Master || master.Status != UserStatuses.Aprovado)
         {
-            admin.Role = "Admin";
-            admin.Status = "Aprovado";
-            admin.AtualizadoEm = DateTime.UtcNow;
+            master.Role = UserRoles.Master;
+            master.Status = UserStatuses.Aprovado;
+            master.SecurityStamp = Guid.NewGuid().ToString("N");
+            master.AtualizadoEm = DateTime.UtcNow;
         }
 
-        await db.SaveChangesAsync();
+        if (string.IsNullOrWhiteSpace(master.SecurityStamp) || master.SecurityStamp == "legacy-stamp")
+        {
+            master.SecurityStamp = Guid.NewGuid().ToString("N");
+        }
     }
+
+    // Garante SecurityStamp único para contas existentes migradas
+    var usuariosSemStamp = await db.Usuarios
+        .Where(u => u.SecurityStamp == "" || u.SecurityStamp == "legacy-stamp")
+        .ToListAsync();
+    foreach (var u in usuariosSemStamp)
+    {
+        u.SecurityStamp = Guid.NewGuid().ToString("N");
+    }
+
+    await db.SaveChangesAsync();
 
     db.Database.ExecuteSqlRaw("PRAGMA journal_mode=WAL;");
 }

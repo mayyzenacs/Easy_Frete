@@ -149,6 +149,7 @@ public sealed class ApiEndpointsIntegrationTests
         var tariffs = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "TESTE",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -167,6 +168,15 @@ public sealed class ApiEndpointsIntegrationTests
             }
         });
         Assert.That(tariffs.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        var configGet = await _client.GetAsync("/api/v1/tarifas/magalu/config");
+        Assert.That(configGet.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (var configJson = JsonDocument.Parse(await configGet.Content.ReadAsStringAsync()))
+        {
+            Assert.That(configJson.RootElement.GetProperty("taxaFixaObrigatoria").GetDecimal(), Is.EqualTo(5m));
+            Assert.That(configJson.RootElement.GetProperty("limiteTabela").GetDecimal(), Is.EqualTo(79m));
+            Assert.That(configJson.RootElement.GetProperty("divisorCubagem").GetDecimal(), Is.EqualTo(6000m));
+        }
 
         var calculate = await _client.PostAsJsonAsync("/api/v1/frete/magalu/calcular", new
         {
@@ -297,13 +307,37 @@ public sealed class ApiEndpointsIntegrationTests
         var emptyTariffs = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = Array.Empty<object>()
         });
         Assert.That(emptyTariffs.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
 
+        var missingConfig = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
+        {
+            origem = "GAS",
+            tarifas = new[]
+            {
+                new
+                {
+                    id = 1,
+                    descricaoFaixa = "Até 2kg",
+                    pesoMinKg = 0m,
+                    pesoMaxKg = 2m,
+                    de79a199SemDesconto = 40m,
+                    de79a199ComDesconto97 = 20m,
+                    de79a199Fulfillment = 12m,
+                    acima199SemDesconto = 50m,
+                    acima199ComDesconto97 = 25m,
+                    acima199Fulfillment = 15m
+                }
+            }
+        });
+        Assert.That(missingConfig.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
         var invalidRange = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -326,6 +360,7 @@ public sealed class ApiEndpointsIntegrationTests
         var zeroTariff = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -348,6 +383,7 @@ public sealed class ApiEndpointsIntegrationTests
         var firstSync = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -390,6 +426,7 @@ public sealed class ApiEndpointsIntegrationTests
         var secondSync = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -443,6 +480,7 @@ public sealed class ApiEndpointsIntegrationTests
         var syncTariff = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
+            configuracao = DefaultConfig(),
             tarifas = new[]
             {
                 new
@@ -485,6 +523,90 @@ public sealed class ApiEndpointsIntegrationTests
         Assert.That(calcJson.RootElement.GetProperty("tarifaBase").GetDecimal(), Is.EqualTo(18m));
         Assert.That(calcJson.RootElement.GetProperty("valorFinalFrete").GetDecimal(), Is.EqualTo(23m));
     }
+
+    [Test]
+    public async Task FreightCalculation_Below79WithoutMeasures_Applies3PercentFulfillmentOr4PercentNonFulfillmentPlusFixedFee()
+    {
+        var token = await LoginAdminAsync();
+        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var sync = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
+        {
+            origem = "TESTE",
+            configuracao = DefaultConfig(),
+            tarifas = new[]
+            {
+                new
+                {
+                    id = 1,
+                    descricaoFaixa = "Até 5kg",
+                    pesoMinKg = 0m,
+                    pesoMaxKg = 5m,
+                    de79a199SemDesconto = 50m,
+                    de79a199ComDesconto97 = 25m,
+                    de79a199Fulfillment = 15m,
+                    acima199SemDesconto = 60m,
+                    acima199ComDesconto97 = 30m,
+                    acima199Fulfillment = 18m
+                }
+            }
+        });
+        Assert.That(sync.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        var fullCalc = await _client.PostAsJsonAsync("/api/v1/frete/magalu/calcular", new
+        {
+            sku = (string?)null,
+            precoProduto = 49.90m,
+            pesoRealKg = 0m,
+            comprimentoCm = 0m,
+            larguraCm = 0m,
+            alturaCm = 0m,
+            isFulfillment = true,
+            reputacaoMaior97 = true
+        });
+        Assert.That(fullCalc.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (var json = JsonDocument.Parse(await fullCalc.Content.ReadAsStringAsync()))
+        {
+            Assert.That(json.RootElement.GetProperty("faixaPrecoAplicada").GetString(), Is.EqualTo("Abaixo de R$ 79,00"));
+            Assert.That(json.RootElement.GetProperty("faixaPesoAplicada").ValueKind, Is.EqualTo(JsonValueKind.Null));
+            Assert.That(json.RootElement.GetProperty("modalidadeAplicada").GetString(), Is.EqualTo("Fulfillment (3%)"));
+            Assert.That(json.RootElement.GetProperty("tarifaBase").GetDecimal(), Is.EqualTo(1.50m));
+            Assert.That(json.RootElement.GetProperty("taxaFixaObrigatoria").GetDecimal(), Is.EqualTo(5.00m));
+            Assert.That(json.RootElement.GetProperty("valorFinalFrete").GetDecimal(), Is.EqualTo(6.50m));
+        }
+
+        var coletaCalc = await _client.PostAsJsonAsync("/api/v1/frete/magalu/calcular", new
+        {
+            sku = "SKU-NAO-CADASTRADO",
+            precoProduto = 49.90m,
+            pesoRealKg = 0m,
+            comprimentoCm = 0m,
+            larguraCm = 0m,
+            alturaCm = 0m,
+            isFulfillment = false,
+            reputacaoMaior97 = false
+        });
+        Assert.That(coletaCalc.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (var json = JsonDocument.Parse(await coletaCalc.Content.ReadAsStringAsync()))
+        {
+            Assert.That(json.RootElement.GetProperty("faixaPrecoAplicada").GetString(), Is.EqualTo("Abaixo de R$ 79,00"));
+            Assert.That(json.RootElement.GetProperty("modalidadeAplicada").GetString(), Is.EqualTo("Coleta e Entrega (4%)"));
+            Assert.That(json.RootElement.GetProperty("tarifaBase").GetDecimal(), Is.EqualTo(2.00m));
+            Assert.That(json.RootElement.GetProperty("taxaFixaObrigatoria").GetDecimal(), Is.EqualTo(5.00m));
+            Assert.That(json.RootElement.GetProperty("valorFinalFrete").GetDecimal(), Is.EqualTo(7.00m));
+        }
+    }
+
+    private static object DefaultConfig() => new
+    {
+        taxaFixaObrigatoria = 5m,
+        limiteTabela = 79m,
+        limiteAcima199 = 199m,
+        percentualAbaixoLimiteFulfillment = 3m,
+        percentualAbaixoLimiteColeta = 4m,
+        divisorCubagem = 6000m,
+        percentualReputacaoMinima = 97m
+    };
 
     private async Task<string> LoginAdminAsync()
     {

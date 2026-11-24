@@ -9,16 +9,17 @@ import {
   Copy,
   Check,
 } from "lucide-react";
-import {
-  FATOR_CUBAGEM_MAGALU,
-  PISO_REPUTACAO_MAGALU,
-} from "../config/marketplaces";
 import type { ApiClient } from "../services/api";
-import type { ResultadoFrete, SkuFeedback } from "../types";
+import type {
+  ConfiguracaoMagaluApiResponse,
+  ResultadoFrete,
+  SkuFeedback,
+} from "../types";
 import {
   brl,
   fmtDecimalBr,
   fmtKg,
+  fmtPercentBr,
   num,
   sanitizeDecimalInput,
 } from "../utils/formatters";
@@ -45,6 +46,32 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
   const [calc, setCalc] = useState(false);
   const [calcError, setCalcError] = useState<string | null>(null);
   const [copiadoFrete, setCopiadoFrete] = useState(false);
+
+  const [config, setConfig] = useState<ConfiguracaoMagaluApiResponse | null>(
+    null,
+  );
+  const [configLoad, setConfigLoad] = useState(true);
+  const [configError, setConfigError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ativo = true;
+    const carregarConfig = async () => {
+      setConfigLoad(true);
+      setConfigError(null);
+      const result = await api.getConfigMagalu();
+      if (!ativo) return;
+      if (result.ok) {
+        setConfig(result.data);
+      } else if (!result.unauthorized) {
+        setConfigError(result.error);
+      }
+      setConfigLoad(false);
+    };
+    void carregarConfig();
+    return () => {
+      ativo = false;
+    };
+  }, [api]);
 
   useEffect(() => {
     if (!copiadoFrete) return;
@@ -77,13 +104,18 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
   };
 
   const real = num(peso);
-  const cubado = +(
-    (num(c) * num(l) * num(a)) /
-    FATOR_CUBAGEM_MAGALU
-  ).toFixed(3);
+  const cubado =
+    config && config.divisorCubagem > 0
+      ? +((num(c) * num(l) * num(a)) / config.divisorCubagem).toFixed(3)
+      : 0;
   const realMaior = real >= cubado;
   const v = num(valor);
-  const mostra97 = !ful && v >= PISO_REPUTACAO_MAGALU;
+  const limiteTabela = config?.limiteTabela ?? null;
+  const abaixoLimite = limiteTabela !== null && v > 0 && v < limiteTabela;
+  const mostraReputacao = limiteTabela !== null && !ful && v >= limiteTabela;
+  const medidasPreenchidas = [peso, c, l, a].every((campo) => num(campo) > 0);
+  const podeCalcular =
+    config !== null && v > 0 && (abaixoLimite || medidasPreenchidas);
 
   const buscarSku = async () => {
     const code = sku.trim().toUpperCase();
@@ -194,7 +226,7 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
       const faixaPeso =
         typeof d.faixaPesoAplicada === "string" && d.faixaPesoAplicada.trim()
           ? d.faixaPesoAplicada.trim()
-          : "—";
+          : "Não se aplica";
       const modalidade =
         typeof d.modalidadeAplicada === "string" && d.modalidadeAplicada.trim()
           ? d.modalidadeAplicada.trim()
@@ -233,6 +265,16 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
         </p>
       </div>
 
+      {configError && (
+        <div
+          role="alert"
+          className="mb-5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center gap-2"
+        >
+          <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+          <span>{configError}</span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         <div className="lg:col-span-7 space-y-5">
           {/* Produto e Medidas */}
@@ -245,7 +287,14 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
                 <input
                   type="text"
                   value={sku}
-                  onChange={(e) => setSku(e.target.value)}
+                  onChange={(e) => {
+                    const nextSku = e.target.value;
+                    setSku(nextSku);
+                    if (!nextSku.trim()) {
+                      setSkuFeedback(null);
+                      setLinkDrive(null);
+                    }
+                  }}
                   onKeyDown={(e) => e.key === "Enter" && void buscarSku()}
                   placeholder="Digite o SKU e pressione Enter"
                   className="flex-1 px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-sm uppercase placeholder:normal-case focus:outline-none focus:border-yellow-400"
@@ -368,6 +417,17 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
                 </div>
               ))}
             </div>
+
+            {config && abaixoLimite && (
+              <p className="text-xs text-zinc-400">
+                Para produtos abaixo de {brl(config.limiteTabela)} as medidas
+                são opcionais (taxa de{" "}
+                {ful
+                  ? `${fmtPercentBr(config.percentualAbaixoLimiteFulfillment)}% no Fulfillment`
+                  : `${fmtPercentBr(config.percentualAbaixoLimiteColeta)}% na Coleta e Entrega`}{" "}
+                + {brl(config.taxaFixaObrigatoria)}).
+              </p>
+            )}
           </section>
 
           {/* Preço e Modalidade */}
@@ -441,11 +501,12 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
               </div>
             </div>
 
-            {mostra97 && (
+            {config && mostraReputacao && (
               <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 rounded-xl bg-zinc-950/90 border border-yellow-400/25">
                 <div className="min-w-0">
                   <span className="text-xs font-semibold text-zinc-200 block">
-                    Reputação acima de 97%?
+                    Reputação acima de{" "}
+                    {fmtPercentBr(config.percentualReputacaoMinima)}%?
                   </span>
                   <span className="text-[11px] text-zinc-500">
                     Aplica desconto na coleta e entrega
@@ -453,7 +514,7 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
                 </div>
                 <div
                   role="group"
-                  aria-label="Reputação acima de 97%"
+                  aria-label={`Reputação acima de ${fmtPercentBr(config.percentualReputacaoMinima)}%`}
                   className="grid grid-cols-2 gap-1 p-1 rounded-lg bg-zinc-900 border border-zinc-800 shrink-0 w-28"
                 >
                   <button
@@ -493,12 +554,14 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
             <button
               type="button"
               onClick={() => void calcular()}
-              disabled={
-                calc || ![peso, c, l, a].every((campo) => num(campo) > 0)
-              }
+              disabled={calc || configLoad || !podeCalcular}
               className="w-full py-3 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 disabled:cursor-not-allowed text-zinc-950 font-black text-sm tracking-wide uppercase transition cursor-pointer"
             >
-              {calc ? "Calculando..." : "Calcular frete"}
+              {configLoad
+                ? "Carregando regras..."
+                : calc
+                  ? "Calculando..."
+                  : "Calcular frete"}
             </button>
 
             {calcError && (
@@ -563,10 +626,12 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
             </div>
           </div>
 
-          <p className="text-[11px] text-zinc-500 -mt-1 px-1">
-            O frete considera o maior valor entre peso real e cubado (C x L x A
-            / {FATOR_CUBAGEM_MAGALU}).
-          </p>
+          {config && (
+            <p className="text-[11px] text-zinc-500 -mt-1 px-1">
+              O frete considera o maior valor entre peso real e cubado (C x L x
+              A / {config.divisorCubagem}).
+            </p>
+          )}
 
           {res ? (
             <section className="bg-zinc-900 border-2 border-yellow-400 rounded-2xl p-5 space-y-3">
@@ -644,7 +709,9 @@ export function MagaluCalculator({ api }: MagaluCalculatorProps) {
                 Nenhum cálculo ainda
               </p>
               <p className="text-xs text-zinc-500 mt-1">
-                Preencha as medidas e o preço, depois clique em{" "}
+                {config
+                  ? `Informe o preço (e as medidas a partir de ${brl(config.limiteTabela)}), depois clique em `
+                  : "Informe os dados do produto e clique em "}
                 <b className="text-yellow-400">Calcular frete</b>.
               </p>
             </div>
