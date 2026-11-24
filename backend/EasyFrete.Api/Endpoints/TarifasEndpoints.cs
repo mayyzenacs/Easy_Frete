@@ -64,10 +64,10 @@ public static class TarifasEndpoints
                     $"Tarifa com Id {tarifa.Id} possui PesoMaxKg inválido."));
             }
 
-            if (valoresMonetarios.Any(valor => valor < 0m))
+            if (valoresMonetarios.Any(valor => valor <= 0m))
             {
                 return Results.BadRequest(new ErrorResponse(
-                    $"Tarifa com Id {tarifa.Id} possui valor monetário inválido."));
+                    $"Tarifa com Id {tarifa.Id} possui valor monetário inválido (deve ser maior que zero)."));
             }
         }
 

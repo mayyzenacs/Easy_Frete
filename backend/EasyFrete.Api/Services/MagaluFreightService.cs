@@ -76,13 +76,17 @@ public sealed class MagaluFreightService : IMagaluFreightService
         // 4. Tarifação
         var preco = request.PrecoProduto;
         decimal tarifaBase;
+        string faixaPrecoAplicada;
         string? faixaAplicada = null;
+        string modalidadeAplicada;
         string regra;
 
         if (preco < LimiteTabela)
         {
             var percentual = request.IsFulfillment ? 0.03m : 0.04m;
             tarifaBase = Math.Round(preco * percentual, 2);
+            faixaPrecoAplicada = "Abaixo de R$ 79,00";
+            modalidadeAplicada = request.IsFulfillment ? "Fulfillment (3%)" : "Coleta e Entrega (4%)";
             regra = request.IsFulfillment ? "PERCENTUAL_FULFILLMENT_3" : "PERCENTUAL_COLETA_ENTREGA_4";
         }
         else
@@ -125,7 +129,11 @@ public sealed class MagaluFreightService : IMagaluFreightService
                 ? "FULFILLMENT"
                 : request.ReputacaoMaior97 ? "REPUTACAO_MAIOR_97" : "SEM_DESCONTO";
 
+            faixaPrecoAplicada = acima199 ? "Acima de R$ 199,00" : "R$ 79,00 – R$ 199,00";
             faixaAplicada = faixa.DescricaoFaixa;
+            modalidadeAplicada = request.IsFulfillment
+                ? "Fulfillment"
+                : request.ReputacaoMaior97 ? "Reputação > 97%" : "Sem desconto";
             regra = $"TABELA_{modalidade}_{(acima199 ? "ACIMA_199" : "79_A_199")}";
         }
 
@@ -146,7 +154,9 @@ public sealed class MagaluFreightService : IMagaluFreightService
             PesoCubadoKg: Measure(pesoCubado),
             PesoConsideradoKg: Measure(pesoConsiderado),
             MaiorPesoTipo: maiorPesoTipo,
+            FaixaPrecoAplicada: faixaPrecoAplicada,
             FaixaPesoAplicada: faixaAplicada,
+            ModalidadeAplicada: modalidadeAplicada,
             RegraAplicada: regra,
             TarifaBase: Money(tarifaBase),
             TaxaFixaObrigatoria: Money(TaxaFixaObrigatoria),

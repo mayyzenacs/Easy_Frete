@@ -323,6 +323,28 @@ public sealed class ApiEndpointsIntegrationTests
         });
         Assert.That(invalidRange.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
 
+        var zeroTariff = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
+        {
+            origem = "GAS",
+            tarifas = new[]
+            {
+                new
+                {
+                    id = 3,
+                    descricaoFaixa = "De 1kg a 2kg",
+                    pesoMinKg = 1m,
+                    pesoMaxKg = 2m,
+                    de79a199SemDesconto = 42.90m,
+                    de79a199ComDesconto97 = 21.45m,
+                    de79a199Fulfillment = 10.73m,
+                    acima199SemDesconto = 46.90m,
+                    acima199ComDesconto97 = 23.45m,
+                    acima199Fulfillment = 0m
+                }
+            }
+        });
+        Assert.That(zeroTariff.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
+
         var firstSync = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
             origem = "GAS",
@@ -458,6 +480,8 @@ public sealed class ApiEndpointsIntegrationTests
         Assert.That(calc.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var calcJson = JsonDocument.Parse(await calc.Content.ReadAsStringAsync());
         Assert.That(calcJson.RootElement.GetProperty("origemMedidas").GetString(), Is.EqualTo("SKU_CADASTRO"));
+        Assert.That(calcJson.RootElement.GetProperty("faixaPrecoAplicada").GetString(), Is.EqualTo("Acima de R$ 199,00"));
+        Assert.That(calcJson.RootElement.GetProperty("modalidadeAplicada").GetString(), Is.EqualTo("Fulfillment"));
         Assert.That(calcJson.RootElement.GetProperty("tarifaBase").GetDecimal(), Is.EqualTo(18m));
         Assert.That(calcJson.RootElement.GetProperty("valorFinalFrete").GetDecimal(), Is.EqualTo(23m));
     }
