@@ -1,5 +1,6 @@
 using EasyFrete.Api.Configuration;
 using EasyFrete.Api.Data;
+using EasyFrete.Api.Endpoints;
 using EasyFrete.Api.Services;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -7,8 +8,43 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using NUnit.Framework;
 
 namespace EasyFrete.Api.Tests;
+
+public static class AuthCookieTestHelper
+{
+    public static string ExtractAuthCookie(HttpResponseMessage response)
+    {
+        Assert.That(response.Headers.TryGetValues("Set-Cookie", out var cookies), Is.True,
+            "Login deve emitir header Set-Cookie.");
+
+        var authCookie = cookies!.FirstOrDefault(c =>
+            c.StartsWith($"{AuthEndpoints.AuthCookieName}=", StringComparison.Ordinal));
+        Assert.That(authCookie, Is.Not.Null,
+            $"Cookie {AuthEndpoints.AuthCookieName} não encontrado em Set-Cookie.");
+
+        var lower = authCookie!.ToLowerInvariant();
+        Assert.That(lower, Does.Contain("httponly"));
+        Assert.That(lower, Does.Contain("secure"));
+        Assert.That(lower, Does.Contain("samesite=lax"));
+        Assert.That(lower, Does.Contain("path=/"));
+
+        var pair = authCookie.Split(';', 2)[0];
+        Assert.That(pair.Length, Is.GreaterThan(AuthEndpoints.AuthCookieName.Length + 1));
+        return pair;
+    }
+
+    public static void UseAuthCookie(HttpClient client, string? cookiePair)
+    {
+        client.DefaultRequestHeaders.Authorization = null;
+        client.DefaultRequestHeaders.Remove("Cookie");
+        if (!string.IsNullOrEmpty(cookiePair))
+        {
+            client.DefaultRequestHeaders.Add("Cookie", cookiePair);
+        }
+    }
+}
 
 public sealed record CapturedResetEmail(string ToEmail, string ToName, string ResetUrl, int ExpiresInMinutes);
 
@@ -59,7 +95,7 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
         Path.Combine(Path.GetTempPath(), $"easyfrete-tests-{Guid.NewGuid():N}.db");
 
     public FakePasswordResetEmailSender EmailSender { get; } = new();
-    public AdjustableTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 11, 24, 20, 0, 0, TimeSpan.Zero));
+    public AdjustableTimeProvider Clock { get; } = new();
 
     public TestWebApplicationFactory()
     {
@@ -95,6 +131,7 @@ public sealed class TestWebApplicationFactory : WebApplicationFactory<Program>, 
                 JwtSecret = "easyfrete-tests-jwt-secret-32-chars-minimum",
                 JwtIssuer = "easyfrete-api",
                 JwtAudience = "easyfrete-web",
+                JwtExpirationMinutes = 60,
                 ExternalCalcApiKey = "external-test-key",
                 SyncApiKey = "sync-test-key",
                 SqlitePath = DatabasePath,

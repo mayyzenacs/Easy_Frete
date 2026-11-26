@@ -17,6 +17,14 @@ public static class TarifasEndpoints
         api.MapPost("/tarifas/magalu/sync", SyncTarifasMagalu)
             .AddEndpointFilter(EndpointFilters.JwtOrApiKeyFilter(settings.SyncApiKey))
             .RequireRateLimiting(RateLimitingConfiguration.SyncPolicy);
+
+        api.MapGet("/tarifas/amazon/config", GetConfiguracaoAmazon)
+            .RequireAuthorization()
+            .RequireRateLimiting(RateLimitingConfiguration.ApiPolicy);
+
+        api.MapPost("/tarifas/amazon/sync", SyncTarifasAmazon)
+            .AddEndpointFilter(EndpointFilters.JwtOrApiKeyFilter(settings.SyncApiKey))
+            .RequireRateLimiting(RateLimitingConfiguration.SyncPolicy);
     }
 
     private static async Task<IResult> GetConfiguracaoMagalu(
@@ -208,6 +216,222 @@ public static class TarifasEndpoints
 
         var removidos = existentes.Count(tarifa => !idsRecebidos.Contains(tarifa.Id));
         db.TarifasMagalu.RemoveRange(
+            existentes.Where(tarifa => !idsRecebidos.Contains(tarifa.Id)));
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
+        return Results.Ok(new
+        {
+            origem,
+            totalRecebido = tarifas.Count,
+            inseridos,
+            atualizados,
+            removidos
+        });
+    }
+
+    private static async Task<IResult> GetConfiguracaoAmazon(
+        AppDbContext db,
+        CancellationToken ct)
+    {
+        var config = await db.ConfiguracoesAmazon
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == 1, ct);
+
+        if (config is null)
+        {
+            return Results.NotFound(new ErrorResponse(
+                "Configuração de tarifas Amazon não carregada. Sincronize a planilha."));
+        }
+
+        return Results.Ok(new ConfiguracaoAmazonResponse(
+            UsaPesoCubado: config.UsaPesoCubado,
+            LimitePrecoTabelaPeso: config.LimitePrecoTabelaPeso,
+            LimitePesoTabelaKg: config.LimitePesoTabelaKg,
+            RegiaoReferenciaDba: config.RegiaoReferenciaDba,
+            TaxaFixaObrigatoria: config.TaxaFixaObrigatoria,
+            AtualizadoEm: config.AtualizadoEm));
+    }
+
+    private static async Task<IResult> SyncTarifasAmazon(
+        SyncTarifasAmazonRequest? request,
+        AppDbContext db,
+        CancellationToken ct)
+    {
+        var tarifas = request?.Tarifas;
+        var configuracao = request?.Configuracao;
+        if (request is null || tarifas is null || tarifas.Count == 0 || configuracao is null)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Envie { origem, configuracao: {...}, tarifas: [...] } com configuração e ao menos uma tarifa."));
+        }
+
+        if (configuracao.LimitePrecoTabelaPeso <= 0m)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Configuração inválida: limitePrecoTabelaPeso deve ser maior que zero."));
+        }
+
+        if (configuracao.LimitePesoTabelaKg <= 0m)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Configuração inválida: limitePesoTabelaKg deve ser maior que zero."));
+        }
+
+        if (configuracao.TaxaFixaObrigatoria < 0m)
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Configuração inválida: taxaFixaObrigatoria não pode ser negativa."));
+        }
+
+        var regiaoReferenciaDba = configuracao.RegiaoReferenciaDba?.Trim();
+        if (string.IsNullOrWhiteSpace(regiaoReferenciaDba))
+        {
+            return Results.BadRequest(new ErrorResponse(
+                "Configuração inválida: regiaoReferenciaDba é obrigatória."));
+        }
+
+        var idsRecebidos = new HashSet<int>();
+        var itensNormalizados = new List<TarifaAmazon>(tarifas.Count);
+
+        foreach (var tarifa in tarifas)
+        {
+            if (tarifa.Id <= 0)
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id inválido: {tarifa.Id}."));
+            }
+
+            if (!idsRecebidos.Add(tarifa.Id))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id duplicado no lote: {tarifa.Id}."));
+            }
+
+            var modalidade = tarifa.Modalidade?.Trim().ToUpperInvariant();
+            if (modalidade is not (AmazonModalidades.Dba or AmazonModalidades.Fba))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui modalidade inválida (esperado DBA ou FBA)."));
+            }
+
+            var tipoRegra = tarifa.TipoRegra?.Trim().ToUpperInvariant();
+            if (tipoRegra is not (AmazonTiposRegra.Fixo or AmazonTiposRegra.FaixaPeso or AmazonTiposRegra.KgAdicional))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui tipoRegra inválido (esperado FIXO, FAIXA_PESO ou KG_ADICIONAL)."));
+            }
+
+            var freteCliente = tarifa.FreteCliente?.Trim().ToUpperInvariant();
+            if (freteCliente is not (AmazonFreteClientes.Gratis or AmazonFreteClientes.PagoPeloCliente))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui freteCliente inválido (esperado GRATIS ou PAGO_PELO_CLIENTE)."));
+            }
+
+            var descricaoFaixa = tarifa.DescricaoFaixaPeso?.Trim();
+            if (string.IsNullOrWhiteSpace(descricaoFaixa))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui descricaoFaixaPeso vazia."));
+            }
+
+            if (tarifa.PrecoMin < 0m || tarifa.PrecoMax < tarifa.PrecoMin)
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui faixa de preço inválida."));
+            }
+
+            if (tarifa.PesoMinKg < 0m ||
+                tarifa.PesoMaxKg < tarifa.PesoMinKg ||
+                (tipoRegra == AmazonTiposRegra.FaixaPeso && tarifa.PesoMaxKg <= tarifa.PesoMinKg))
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui faixa de peso inválida."));
+            }
+
+            if (tarifa.Tarifa < 0m)
+            {
+                return Results.BadRequest(new ErrorResponse(
+                    $"Tarifa Amazon com Id {tarifa.Id} possui valor monetário negativo."));
+            }
+
+            itensNormalizados.Add(new TarifaAmazon
+            {
+                Id = tarifa.Id,
+                Modalidade = modalidade,
+                TipoRegra = tipoRegra,
+                DescricaoFaixaPeso = descricaoFaixa,
+                PrecoMin = Math.Round(tarifa.PrecoMin, 2),
+                PrecoMax = Math.Round(tarifa.PrecoMax, 2),
+                PesoMinKg = Math.Round(tarifa.PesoMinKg, 3),
+                PesoMaxKg = Math.Round(tarifa.PesoMaxKg, 3),
+                Tarifa = Math.Round(tarifa.Tarifa, 2),
+                FreteCliente = freteCliente
+            });
+        }
+
+        var origem = string.IsNullOrWhiteSpace(request.Origem)
+            ? "DESCONHECIDA"
+            : request.Origem.Trim();
+
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var agora = DateTime.UtcNow;
+        var configExistente = await db.ConfiguracoesAmazon.FirstOrDefaultAsync(c => c.Id == 1, ct);
+        if (configExistente is not null)
+        {
+            configExistente.UsaPesoCubado = configuracao.UsaPesoCubado;
+            configExistente.LimitePrecoTabelaPeso = Math.Round(configuracao.LimitePrecoTabelaPeso, 2);
+            configExistente.LimitePesoTabelaKg = Math.Round(configuracao.LimitePesoTabelaKg, 3);
+            configExistente.RegiaoReferenciaDba = regiaoReferenciaDba;
+            configExistente.TaxaFixaObrigatoria = Math.Round(configuracao.TaxaFixaObrigatoria, 2);
+            configExistente.AtualizadoEm = agora;
+        }
+        else
+        {
+            db.ConfiguracoesAmazon.Add(new ConfiguracaoAmazon
+            {
+                Id = 1,
+                UsaPesoCubado = configuracao.UsaPesoCubado,
+                LimitePrecoTabelaPeso = Math.Round(configuracao.LimitePrecoTabelaPeso, 2),
+                LimitePesoTabelaKg = Math.Round(configuracao.LimitePesoTabelaKg, 3),
+                RegiaoReferenciaDba = regiaoReferenciaDba,
+                TaxaFixaObrigatoria = Math.Round(configuracao.TaxaFixaObrigatoria, 2),
+                AtualizadoEm = agora
+            });
+        }
+
+        var existentes = await db.TarifasAmazon.ToListAsync(ct);
+        var existentesPorId = existentes.ToDictionary(tarifa => tarifa.Id);
+        var inseridos = 0;
+        var atualizados = 0;
+
+        foreach (var item in itensNormalizados)
+        {
+            if (existentesPorId.TryGetValue(item.Id, out var existente))
+            {
+                existente.Modalidade = item.Modalidade;
+                existente.TipoRegra = item.TipoRegra;
+                existente.DescricaoFaixaPeso = item.DescricaoFaixaPeso;
+                existente.PrecoMin = item.PrecoMin;
+                existente.PrecoMax = item.PrecoMax;
+                existente.PesoMinKg = item.PesoMinKg;
+                existente.PesoMaxKg = item.PesoMaxKg;
+                existente.Tarifa = item.Tarifa;
+                existente.FreteCliente = item.FreteCliente;
+                atualizados++;
+            }
+            else
+            {
+                db.TarifasAmazon.Add(item);
+                inseridos++;
+            }
+        }
+
+        var removidos = existentes.Count(tarifa => !idsRecebidos.Contains(tarifa.Id));
+        db.TarifasAmazon.RemoveRange(
             existentes.Where(tarifa => !idsRecebidos.Contains(tarifa.Id)));
 
         await db.SaveChangesAsync(ct);

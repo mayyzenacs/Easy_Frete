@@ -3,14 +3,18 @@ import type {
   AdminUsuarioPatchPayload,
   ApiErrorResponse,
   AuthLoginResponse,
+  CalcularFreteAmazonApiRequest,
+  CalcularFreteAmazonApiResponse,
   CalcularFreteApiRequest,
   CalcularFreteApiResponse,
+  ConfiguracaoAmazonApiResponse,
   ConfiguracaoMagaluApiResponse,
   MessageApiResponse,
   NotificacoesApiResponse,
   ProdutoApiResponse,
   ResetTokenValidationResponse,
   SolicitacaoExclusao,
+  UsuarioApiResponse,
 } from "../types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "/api/v1").replace(
@@ -32,6 +36,7 @@ interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   auth?: boolean;
+  suppressUnauthorized?: boolean;
   fallbackError: string;
   networkError?: string;
 }
@@ -41,6 +46,8 @@ export interface ApiClient {
     email: string,
     password: string,
   ) => Promise<ApiResult<AuthLoginResponse>>;
+  authLogout: () => Promise<ApiResult<MessageApiResponse>>;
+  authMe: () => Promise<ApiResult<UsuarioApiResponse>>;
   authRegister: (
     nome: string,
     email: string,
@@ -61,6 +68,10 @@ export interface ApiClient {
   calcularFreteMagalu: (
     payload: CalcularFreteApiRequest,
   ) => Promise<ApiResult<CalcularFreteApiResponse>>;
+  getConfigAmazon: () => Promise<ApiResult<ConfiguracaoAmazonApiResponse>>;
+  calcularFreteAmazon: (
+    payload: CalcularFreteAmazonApiRequest,
+  ) => Promise<ApiResult<CalcularFreteAmazonApiResponse>>;
   listAdminUsuarios: () => Promise<ApiResult<AdminUsuarioApiItem[]>>;
   patchAdminUsuario: (
     id: string,
@@ -104,44 +115,30 @@ const extractErrorDetails = (
   return { error: fallback };
 };
 
-export function createApiClient(
-  token: string | null,
-  onUnauthorized: () => void,
-): ApiClient {
+export function createApiClient(onUnauthorized: () => void): ApiClient {
   const request = async <T>(
     path: string,
     options: RequestOptions,
   ): Promise<ApiResult<T>> => {
     const useAuth = options.auth !== false;
-    const activeToken = useAuth ? token : null;
-
-    if (useAuth && !activeToken) {
-      onUnauthorized();
-      return {
-        ok: false,
-        status: 401,
-        error: "Sessão expirada.",
-        unauthorized: true,
-      };
-    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
-    if (useAuth && activeToken) {
-      headers.Authorization = `Bearer ${activeToken}`;
-    }
 
     try {
       const response = await fetch(`${API_BASE_URL}${path}`, {
         method: options.method ?? "GET",
+        credentials: "include",
         headers,
         body:
           options.body !== undefined ? JSON.stringify(options.body) : undefined,
       });
 
       if (useAuth && response.status === 401) {
-        onUnauthorized();
+        if (!options.suppressUnauthorized) {
+          onUnauthorized();
+        }
         return {
           ok: false,
           status: 401,
@@ -187,6 +184,21 @@ export function createApiClient(
         body: { email, password },
         fallbackError:
           "Não foi possível autenticar. Verifique os dados informados.",
+      }),
+
+    authLogout: () =>
+      request<MessageApiResponse>("/auth/logout", {
+        method: "POST",
+        auth: false,
+        fallbackError: "Não foi possível encerrar a sessão.",
+      }),
+
+    authMe: () =>
+      request<UsuarioApiResponse>("/auth/me", {
+        method: "GET",
+        auth: true,
+        suppressUnauthorized: true,
+        fallbackError: "Sessão não autenticada.",
       }),
 
     authRegister: (nome, email, password) =>
@@ -241,6 +253,20 @@ export function createApiClient(
 
     calcularFreteMagalu: (payload) =>
       request<CalcularFreteApiResponse>("/frete/magalu/calcular", {
+        method: "POST",
+        body: payload,
+        fallbackError: "Não foi possível calcular o frete.",
+      }),
+
+    getConfigAmazon: () =>
+      request<ConfiguracaoAmazonApiResponse>("/tarifas/amazon/config", {
+        method: "GET",
+        fallbackError: "Configuração da Amazon não carregada.",
+        networkError: "Sem conexão ao carregar as regras de frete.",
+      }),
+
+    calcularFreteAmazon: (payload) =>
+      request<CalcularFreteAmazonApiResponse>("/frete/amazon/calcular", {
         method: "POST",
         body: payload,
         fallbackError: "Não foi possível calcular o frete.",

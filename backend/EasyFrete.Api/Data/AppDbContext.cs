@@ -18,6 +18,8 @@ public class AppDbContext : DbContext
     public DbSet<Produto> Produtos => Set<Produto>();
     public DbSet<TarifaMagalu> TarifasMagalu => Set<TarifaMagalu>();
     public DbSet<ConfiguracaoMagalu> ConfiguracoesMagalu => Set<ConfiguracaoMagalu>();
+    public DbSet<TarifaAmazon> TarifasAmazon => Set<TarifaAmazon>();
+    public DbSet<ConfiguracaoAmazon> ConfiguracoesAmazon => Set<ConfiguracaoAmazon>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -108,6 +110,34 @@ public class AppDbContext : DbContext
             e.ToTable("ConfiguracoesMagalu");
             e.HasKey(c => c.Id);
             e.Property(c => c.Id).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<TarifaAmazon>(e =>
+        {
+            e.ToTable("TarifasAmazon");
+            e.HasKey(t => t.Id);
+            e.Property(t => t.Id).ValueGeneratedNever();
+            e.Property(t => t.Modalidade).HasMaxLength(16).IsRequired();
+            e.Property(t => t.TipoRegra).HasMaxLength(24).IsRequired();
+            e.Property(t => t.DescricaoFaixaPeso).HasMaxLength(100).IsRequired();
+            e.Property(t => t.PrecoMin).HasPrecision(10, 2);
+            e.Property(t => t.PrecoMax).HasPrecision(10, 2);
+            e.Property(t => t.PesoMinKg).HasPrecision(10, 3);
+            e.Property(t => t.PesoMaxKg).HasPrecision(10, 3);
+            e.Property(t => t.Tarifa).HasPrecision(10, 2);
+            e.Property(t => t.FreteCliente).HasMaxLength(32).IsRequired();
+            e.HasIndex(t => new { t.Modalidade, t.TipoRegra, t.PrecoMin, t.PrecoMax, t.PesoMaxKg });
+        });
+
+        modelBuilder.Entity<ConfiguracaoAmazon>(e =>
+        {
+            e.ToTable("ConfiguracoesAmazon");
+            e.HasKey(c => c.Id);
+            e.Property(c => c.Id).ValueGeneratedNever();
+            e.Property(c => c.LimitePrecoTabelaPeso).HasPrecision(10, 2);
+            e.Property(c => c.LimitePesoTabelaKg).HasPrecision(10, 3);
+            e.Property(c => c.RegiaoReferenciaDba).HasMaxLength(64).IsRequired();
+            e.Property(c => c.TaxaFixaObrigatoria).HasPrecision(10, 2);
         });
     }
 }

@@ -8,7 +8,8 @@ import {
   Check,
 } from "lucide-react";
 import type { ApiClient } from "../services/api";
-import type { UserDisplayMetadata } from "../types";
+import type { UserProfile } from "../types";
+import { parseUserProfile } from "../hooks/useAuth";
 import { isValidEmail } from "../utils/formatters";
 
 type AuthMode = "login" | "register" | "forgot" | "reset";
@@ -17,10 +18,7 @@ interface AuthScreenProps {
   api: ApiClient;
   initialResetToken?: string | null;
   onClearResetToken?: () => void;
-  onAuthenticated: (
-    jwt: string,
-    displayFallback?: Partial<UserDisplayMetadata>,
-  ) => boolean;
+  onAuthenticated: (profile: UserProfile) => void;
 }
 
 export function AuthScreen({
@@ -132,23 +130,14 @@ export function AuthScreen({
         return;
       }
 
-      const d = result.data;
-      const jwt = d?.token || d?.accessToken || d?.jwt;
-      if (!jwt) {
+      const profile = parseUserProfile(result.data?.usuario, emailLimpo);
+      if (!profile) {
         setAuthErro("Não foi possível entrar. Tente novamente.");
         return;
       }
 
-      const ok = onAuthenticated(jwt, {
-        nome: d?.usuario?.nome ? String(d.usuario.nome) : undefined,
-        email: d?.usuario?.email ? String(d.usuario.email) : emailLimpo,
-      });
-
-      if (ok) {
-        setSenha("");
-      } else {
-        setAuthErro("Não foi possível entrar. Tente novamente.");
-      }
+      onAuthenticated(profile);
+      setSenha("");
     } finally {
       setAuthLoad(false);
     }

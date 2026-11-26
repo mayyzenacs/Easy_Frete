@@ -28,7 +28,9 @@ if (!string.Equals(
     }
 }
 
-var settings = ApiSettings.FromEnvironment();
+var builder = WebApplication.CreateBuilder(args);
+
+var settings = ApiSettings.FromEnvironment(builder.Configuration);
 
 var dbPath = Path.GetFullPath(settings.SqlitePath);
 var dbDir = Path.GetDirectoryName(dbPath);
@@ -37,12 +39,11 @@ if (!string.IsNullOrEmpty(dbDir))
     Directory.CreateDirectory(dbDir);
 }
 
-var builder = WebApplication.CreateBuilder(args);
-
 builder.Services.AddSingleton(settings);
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddDbContext<AppDbContext>(options => options.UseSqlite($"Data Source={dbPath}"));
 builder.Services.AddScoped<IMagaluFreightService, MagaluFreightService>();
+builder.Services.AddScoped<IAmazonFreightService, AmazonFreightService>();
 builder.Services.AddScoped<IPasswordResetEmailSender, MailKitPasswordResetEmailSender>();
 
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -71,9 +72,20 @@ builder.Services
             ClockSkew = TimeSpan.FromMinutes(1)
         };
 
-        // Revogação imediata de JWT quando a conta é excluída, rejeitada, alterada de role ou redefine a senha
+        // Extrai JWT do cookie HttpOnly quando o header Authorization não estiver presente
+        // e revoga imediatamente via SecurityStamp quando a conta é alterada/excluída/redefinida
         options.Events = new JwtBearerEvents
         {
+            OnMessageReceived = context =>
+            {
+                if (!context.Request.Headers.ContainsKey("Authorization") &&
+                    context.Request.Cookies.TryGetValue(AuthEndpoints.AuthCookieName, out var cookieToken) &&
+                    !string.IsNullOrWhiteSpace(cookieToken))
+                {
+                    context.Token = cookieToken;
+                }
+                return Task.CompletedTask;
+            },
             OnTokenValidated = async context =>
             {
                 var idClaim = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier);

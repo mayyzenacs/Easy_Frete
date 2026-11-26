@@ -17,6 +17,39 @@ namespace EasyFrete.Api.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
 
+            modelBuilder.Entity("EasyFrete.Api.Models.ConfiguracaoAmazon", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("AtualizadoEm")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("LimitePesoTabelaKg")
+                        .HasPrecision(10, 3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("LimitePrecoTabelaPeso")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RegiaoReferenciaDba")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("TaxaFixaObrigatoria")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("UsaPesoCubado")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("ConfiguracoesAmazon", (string)null);
+                });
+
             modelBuilder.Entity("EasyFrete.Api.Models.ConfiguracaoMagalu", b =>
                 {
                     b.Property<int>("Id")
@@ -211,6 +244,58 @@ namespace EasyFrete.Api.Data.Migrations
                     b.HasIndex("UsuarioAlvoId", "Status");
 
                     b.ToTable("SolicitacoesExclusao", (string)null);
+                });
+
+            modelBuilder.Entity("EasyFrete.Api.Models.TarifaAmazon", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DescricaoFaixaPeso")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FreteCliente")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Modalidade")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PesoMaxKg")
+                        .HasPrecision(10, 3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PesoMinKg")
+                        .HasPrecision(10, 3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PrecoMax")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("PrecoMin")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Tarifa")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TipoRegra")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Modalidade", "TipoRegra", "PrecoMin", "PrecoMax", "PesoMaxKg");
+
+                    b.ToTable("TarifasAmazon", (string)null);
                 });
 
             modelBuilder.Entity("EasyFrete.Api.Models.TarifaMagalu", b =>

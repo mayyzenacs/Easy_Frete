@@ -92,17 +92,16 @@ export interface ApiErrorResponse {
   bloqueadoAte?: string;
 }
 
+export interface UsuarioApiResponse {
+  id?: string;
+  nome?: string;
+  email?: string;
+  role?: string;
+  status?: string;
+}
+
 export interface AuthLoginResponse {
-  token?: string;
-  accessToken?: string;
-  jwt?: string;
-  usuario?: {
-    id?: string;
-    nome?: string;
-    email?: string;
-    role?: string;
-    status?: string;
-  };
+  usuario?: UsuarioApiResponse;
 }
 
 export interface ProdutoApiResponse {
@@ -159,4 +158,58 @@ export interface AdminUsuarioApiItem {
   status?: unknown;
   criadoEm?: string;
   possuiPedidoExclusaoPendente?: boolean;
+}
+
+export type AmazonModalidade = "DBA" | "FBA";
+export type AmazonTipoRegra = "FIXO" | "FAIXA_PESO" | "KG_ADICIONAL";
+export type AmazonFreteCliente = "GRATIS" | "PAGO_PELO_CLIENTE";
+
+export interface ConfiguracaoAmazonApiResponse {
+  usaPesoCubado: boolean;
+  limitePrecoTabelaPeso: number;
+  limitePesoTabelaKg: number;
+  regiaoReferenciaDba: string;
+  taxaFixaObrigatoria: number;
+  atualizadoEm?: string;
+}
+
+export interface CalcularFreteAmazonApiRequest {
+  sku: string | null;
+  precoProduto: number;
+  pesoRealKg: number;
+  modalidade: AmazonModalidade;
+}
+
+export interface CalcularFreteAmazonApiResponse {
+  sku?: string | null;
+  nome?: string | null;
+  origemMedidas?: string;
+  precoProduto?: number;
+  modalidade?: AmazonModalidade;
+  tipoRegra?: AmazonTipoRegra;
+  descricaoFaixaPeso?: string | null;
+  freteCliente?: AmazonFreteCliente;
+  pesoRealKg?: number;
+  comprimentoCm?: number;
+  larguraCm?: number;
+  alturaCm?: number;
+  tarifaBase?: number;
+  kgExcedentes?: number;
+  tarifaKgAdicional?: number;
+  valorKgExcedente?: number;
+  taxaFixaObrigatoria?: number;
+  valorFinalFrete?: number;
+}
+
+export interface ResultadoFreteAmazon {
+  modalidade: AmazonModalidade;
+  tipoRegra: AmazonTipoRegra;
+  faixaPeso: string;
+  freteCliente: AmazonFreteCliente;
+  tarifaBase: number;
+  kgExcedentes: number;
+  tarifaKgAdicional: number;
+  valorKgExcedente: number;
+  taxaFixa: number;
+  custoTotal: number;
 }

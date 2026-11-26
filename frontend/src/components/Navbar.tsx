@@ -16,6 +16,7 @@ import {
 import { MARKETPLACES } from "../config/marketplaces";
 import type {
   ActiveView,
+  MarketplaceId,
   NotificacaoItem,
   UserProfile,
 } from "../types";
@@ -28,9 +29,11 @@ import {
 interface NavbarProps {
   user: UserProfile;
   activeView: ActiveView;
+  activeMarketplace: MarketplaceId;
   notificacoes: NotificacaoItem[];
   naoLidas: number;
   onSelectView: (view: ActiveView) => void;
+  onSelectMarketplace: (marketplace: MarketplaceId) => void;
   onOpenNotification: (notif: NotificacaoItem) => void;
   onMarkAllRead: () => void;
   onOpenAccount: () => void;
@@ -40,9 +43,11 @@ interface NavbarProps {
 export function Navbar({
   user,
   activeView,
+  activeMarketplace,
   notificacoes,
   naoLidas,
   onSelectView,
+  onSelectMarketplace,
   onOpenNotification,
   onMarkAllRead,
   onOpenAccount,
@@ -124,22 +129,26 @@ export function Navbar({
         <div className="flex items-center gap-1 bg-zinc-900 p-1 rounded-full border border-zinc-800 text-xs">
           <button
             type="button"
-            onClick={() => onSelectView("frete")}
+            onClick={() => onSelectMarketplace("magalu")}
             className={`px-4 py-1.5 rounded-full font-bold transition cursor-pointer ${
-              activeView === "frete"
+              activeView === "frete" && activeMarketplace === "magalu"
                 ? "bg-yellow-400 text-zinc-950"
                 : "text-zinc-300 hover:text-white"
             }`}
           >
             {MARKETPLACES.magalu.label}
           </button>
-          <span
-            className="px-3 py-1.5 text-zinc-500 cursor-not-allowed"
-            title="Em breve"
+          <button
+            type="button"
+            onClick={() => onSelectMarketplace("amazon")}
+            className={`px-4 py-1.5 rounded-full font-bold transition cursor-pointer ${
+              activeView === "frete" && activeMarketplace === "amazon"
+                ? "bg-[#FF9900] text-zinc-950"
+                : "text-zinc-300 hover:text-white"
+            }`}
           >
-            {MARKETPLACES.amazon.label}{" "}
-            <span className="text-[10px] text-zinc-600">· em breve</span>
-          </span>
+            {MARKETPLACES.amazon.label}
+          </button>
         </div>
 
         <div className="flex items-center gap-2.5">

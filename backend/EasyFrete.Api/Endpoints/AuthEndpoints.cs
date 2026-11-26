@@ -17,6 +17,7 @@ namespace EasyFrete.Api.Endpoints;
 
 public static class AuthEndpoints
 {
+    public const string AuthCookieName = "ef_access_token";
     private const int MinPasswordLength = 8;
     private const int MaxPasswordLength = 128;
 
@@ -29,10 +30,23 @@ public static class AuthEndpoints
             .AllowAnonymous()
             .RequireRateLimiting(RateLimitingConfiguration.AuthPolicy);
 
-        api.MapPost("/auth/login", (LoginRequest? request, AppDbContext db, TimeProvider clock, CancellationToken ct) =>
-                Login(request, db, settings, clock, ct))
+        api.MapPost("/auth/login", (
+                LoginRequest? request,
+                HttpContext http,
+                IHostEnvironment env,
+                AppDbContext db,
+                TimeProvider clock,
+                CancellationToken ct) =>
+                Login(request, http, env, db, settings, clock, ct))
             .AllowAnonymous()
             .RequireRateLimiting(RateLimitingConfiguration.AuthPolicy);
+
+        api.MapPost("/auth/logout", Logout)
+            .AllowAnonymous();
+
+        api.MapGet("/auth/me", GetCurrentUser)
+            .RequireAuthorization()
+            .RequireRateLimiting(RateLimitingConfiguration.ApiPolicy);
 
         api.MapPost("/auth/forgot-password", ForgotPassword)
             .AllowAnonymous()
@@ -121,6 +135,8 @@ public static class AuthEndpoints
 
     private static async Task<IResult> Login(
         LoginRequest? request,
+        HttpContext http,
+        IHostEnvironment env,
         AppDbContext db,
         ApiSettings settings,
         TimeProvider clock,
@@ -158,7 +174,7 @@ public static class AuthEndpoints
                 statusCode: StatusCodes.Status403Forbidden);
 
         var agora = clock.GetUtcNow().UtcDateTime;
-        var expira = agora.AddHours(12);
+        var expira = agora.AddMinutes(settings.JwtExpirationMinutes);
         var descriptor = new SecurityTokenDescriptor
         {
             Subject = new ClaimsIdentity(
@@ -180,8 +196,58 @@ public static class AuthEndpoints
                 SecurityAlgorithms.HmacSha256)
         };
         var token = new JsonWebTokenHandler().CreateToken(descriptor);
-        return Results.Ok(new LoginResponse(token,
+
+        http.Response.Cookies.Append(AuthCookieName, token, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !env.IsDevelopment(),
+            SameSite = SameSiteMode.Lax,
+            Path = "/",
+            Expires = new DateTimeOffset(expira, TimeSpan.Zero)
+        });
+
+        return Results.Ok(new LoginResponse(
             new UsuarioResumoDto(usuario.Id, usuario.Nome, usuario.Email, usuario.Role, usuario.Status)));
+    }
+
+    internal static IResult Logout(HttpContext http, IHostEnvironment env)
+    {
+        http.Response.Cookies.Delete(AuthCookieName, new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = !env.IsDevelopment(),
+            SameSite = SameSiteMode.Lax,
+            Path = "/"
+        });
+
+        return Results.Ok(new MessageResponse("Sessão encerrada com sucesso."));
+    }
+
+    private static async Task<IResult> GetCurrentUser(
+        HttpContext http,
+        AppDbContext db,
+        CancellationToken ct)
+    {
+        var idClaim = http.User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(idClaim, out var userId))
+        {
+            return Results.Json(new ErrorResponse("Sessão inválida."),
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        var usuario = await db.Usuarios
+            .AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new UsuarioResumoDto(u.Id, u.Nome, u.Email, u.Role, u.Status))
+            .FirstOrDefaultAsync(ct);
+
+        if (usuario is null)
+        {
+            return Results.Json(new ErrorResponse("Sessão inválida."),
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        return Results.Ok(usuario);
     }
 
     private static async Task<IResult> ForgotPassword(
