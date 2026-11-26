@@ -18,5 +18,9 @@ public static class ApiEndpoints
         api.MapProdutosEndpoints(settings);
         api.MapFreteEndpoints(settings);
         api.MapTarifasEndpoints(settings);
+
+        // Alias explícito para /api/auth/logout mantendo também /api/v1/auth/logout
+        app.MapPost("/api/auth/logout", AuthEndpoints.Logout)
+            .AllowAnonymous();
     }
 }

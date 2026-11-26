@@ -148,7 +148,7 @@ public sealed class MasterDeletionAndPasswordResetTests
         await RegisterAndApproveAsync("Admin Solicitante", "solicitante@easyfrete.test", "SenhaForte123!", UserRoles.Admin, masterToken);
 
         // Novo usuário se cadastra -> gera notificação de cadastro pendente e NÃO envia e-mail
-        _client.DefaultRequestHeaders.Authorization = null;
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
         var reg1 = await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
             nome = "Alvo Aprovacao",
@@ -287,7 +287,7 @@ public sealed class MasterDeletionAndPasswordResetTests
 
         // Faz login antes do reset para validar que a sessão antiga será revogada após redefinir
         var oldJwt = await LoginAsync("reset@easyfrete.test", "SenhaAntiga123!");
-        _client.DefaultRequestHeaders.Authorization = null;
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
 
         // 1º envio -> OK + e-mail enviado
         var first = await _client.PostAsJsonAsync("/api/v1/auth/forgot-password", new { email = "reset@easyfrete.test" });
@@ -341,7 +341,7 @@ public sealed class MasterDeletionAndPasswordResetTests
         UseBearer(oldJwt);
         var callWithOldJwt = await _client.GetAsync("/api/v1/produtos");
         Assert.That(callWithOldJwt.StatusCode, Is.EqualTo(HttpStatusCode.Unauthorized));
-        _client.DefaultRequestHeaders.Authorization = null;
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
 
         // Senha antiga não entra mais; nova senha entra normalmente
         var oldLogin = await _client.PostAsJsonAsync("/api/v1/auth/login", new
@@ -390,18 +390,19 @@ public sealed class MasterDeletionAndPasswordResetTests
         Assert.That(noSmtp.StatusCode, Is.EqualTo(HttpStatusCode.ServiceUnavailable));
     }
 
-    private void UseBearer(string token)
+    private void UseBearer(string cookiePair)
     {
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        AuthCookieTestHelper.UseAuthCookie(_client, cookiePair);
     }
 
     private async Task<string> LoginAsync(string email, string password)
     {
-        _client.DefaultRequestHeaders.Authorization = null;
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
         var res = await _client.PostAsJsonAsync("/api/v1/auth/login", new { email, password });
         Assert.That(res.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var json = JsonDocument.Parse(await res.Content.ReadAsStringAsync());
-        return json.RootElement.GetProperty("token").GetString()!;
+        Assert.That(json.RootElement.TryGetProperty("token", out _), Is.False);
+        return AuthCookieTestHelper.ExtractAuthCookie(res);
     }
 
     private async Task<Guid> RegisterAndApproveAsync(

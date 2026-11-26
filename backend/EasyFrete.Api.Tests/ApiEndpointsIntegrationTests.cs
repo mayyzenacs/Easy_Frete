@@ -130,8 +130,8 @@ public sealed class ApiEndpointsIntegrationTests
         });
         Assert.That(sync.StatusCode, Is.EqualTo(HttpStatusCode.OK));
 
-        var adminToken = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+        var adminCookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, adminCookie);
         var get = await _client.GetAsync("/api/v1/produtos/SKU-TESTE-1");
         Assert.That(get.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var json = JsonDocument.Parse(await get.Content.ReadAsStringAsync());
@@ -143,8 +143,8 @@ public sealed class ApiEndpointsIntegrationTests
     [Test]
     public async Task TariffSyncAndFreightCalculationReturn200AndInvalidRequestsReturnErrors()
     {
-        var token = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var cookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, cookie);
 
         var tariffs = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
@@ -214,8 +214,8 @@ public sealed class ApiEndpointsIntegrationTests
     [Test]
     public async Task ProductEndpoints_ListGetNotFoundAndSyncUpsertValidation()
     {
-        var token = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var cookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, cookie);
 
         var emptyBatch = await _client.PostAsJsonAsync("/api/v1/produtos/sync-lote", new
         {
@@ -527,8 +527,8 @@ public sealed class ApiEndpointsIntegrationTests
     [Test]
     public async Task FreightCalculation_Below79WithoutMeasures_Applies3PercentFulfillmentOr4PercentNonFulfillmentPlusFixedFee()
     {
-        var token = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        var cookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, cookie);
 
         var sync = await _client.PostAsJsonAsync("/api/v1/tarifas/magalu/sync", new
         {
@@ -610,6 +610,7 @@ public sealed class ApiEndpointsIntegrationTests
 
     private async Task<string> LoginAdminAsync()
     {
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
         var login = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
             email = "admin@easyfrete.test",
@@ -617,6 +618,7 @@ public sealed class ApiEndpointsIntegrationTests
         });
         Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var json = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        return json.RootElement.GetProperty("token").GetString()!;
+        Assert.That(json.RootElement.TryGetProperty("token", out _), Is.False);
+        return AuthCookieTestHelper.ExtractAuthCookie(login);
     }
 }

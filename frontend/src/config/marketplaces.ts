@@ -15,6 +15,6 @@ export const MARKETPLACES: Record<MarketplaceId, MarketplaceConfig> = {
   amazon: {
     id: "amazon",
     label: "Amazon",
-    available: false,
+    available: true,
   },
 };

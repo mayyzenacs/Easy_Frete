@@ -1,12 +1,19 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { AccountModal } from "./components/AccountModal";
 import { AdminPanel } from "./components/AdminPanel";
+import { AmazonCalculator } from "./components/AmazonCalculator";
 import { AuthScreen } from "./components/AuthScreen";
 import { MagaluCalculator } from "./components/MagaluCalculator";
 import { Navbar } from "./components/Navbar";
-import { useAuth } from "./hooks/useAuth";
+import { useAuth, parseUserProfile } from "./hooks/useAuth";
 import { createApiClient } from "./services/api";
-import type { ActiveView, AdminTab, NotificacaoItem } from "./types";
+import type {
+  ActiveView,
+  AdminTab,
+  MarketplaceId,
+  NotificacaoItem,
+  UserProfile,
+} from "./types";
 import { isAdminOrMaster } from "./utils/formatters";
 
 const readResetTokenFromUrl = (): string | null => {
@@ -32,8 +39,17 @@ const clearResetTokenFromUrl = () => {
 };
 
 export default function App() {
-  const { token, user, login, logout, updateUserDisplay } = useAuth();
+  const {
+    user,
+    checkingSession,
+    login,
+    clearSession,
+    finishSessionCheck,
+    updateUserDisplay,
+  } = useAuth();
   const [activeView, setActiveView] = useState<ActiveView>("frete");
+  const [activeMarketplace, setActiveMarketplace] =
+    useState<MarketplaceId>("magalu");
   const [adminTab, setAdminTab] = useState<AdminTab>("users");
   const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [resetToken, setResetToken] = useState<string | null>(
@@ -42,21 +58,58 @@ export default function App() {
   const [notificacoes, setNotificacoes] = useState<NotificacaoItem[]>([]);
   const [naoLidas, setNaoLidas] = useState(0);
 
-  const handleLogout = useCallback(() => {
-    logout();
+  const resetLocalSession = useCallback(() => {
+    clearSession();
     setActiveView("frete");
+    setActiveMarketplace("magalu");
     setAdminTab("users");
     setAccountModalOpen(false);
     setNotificacoes([]);
     setNaoLidas(0);
-  }, [logout]);
+  }, [clearSession]);
 
   const api = useMemo(
-    () => createApiClient(token, handleLogout),
-    [token, handleLogout],
+    () => createApiClient(resetLocalSession),
+    [resetLocalSession],
   );
 
-  const canAccessAdmin = Boolean(token && user && isAdminOrMaster(user.role));
+  const handleLogout = useCallback(async () => {
+    await api.authLogout();
+    resetLocalSession();
+  }, [api, resetLocalSession]);
+
+  useEffect(() => {
+    if (resetToken) {
+      finishSessionCheck();
+      return;
+    }
+
+    let cancelled = false;
+    const verificarSessao = async () => {
+      const result = await api.authMe();
+      if (cancelled) return;
+      if (result.ok) {
+        const profile = parseUserProfile(result.data);
+        if (profile) {
+          login(profile);
+          return;
+        }
+      }
+      finishSessionCheck();
+    };
+
+    void verificarSessao();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, resetToken, login, finishSessionCheck]);
+
+  const handleSelectMarketplace = useCallback((marketplace: MarketplaceId) => {
+    setActiveMarketplace(marketplace);
+    setActiveView("frete");
+  }, []);
+
+  const canAccessAdmin = Boolean(user && isAdminOrMaster(user.role));
 
   const refreshNotifications = useCallback(async () => {
     if (!canAccessAdmin) return;
@@ -129,16 +182,24 @@ export default function App() {
     setResetToken(null);
   }, []);
 
-  if (!token || !user || resetToken) {
+  if (checkingSession && !resetToken) {
+    return (
+      <div className="min-h-screen bg-[#09090b] text-zinc-400 flex items-center justify-center text-xs">
+        Carregando...
+      </div>
+    );
+  }
+
+  if (!user || resetToken) {
     return (
       <AuthScreen
         key={resetToken ?? "auth"}
         api={api}
         initialResetToken={resetToken}
         onClearResetToken={handleClearResetToken}
-        onAuthenticated={(jwt, displayFallback) => {
+        onAuthenticated={(profile: UserProfile) => {
           handleClearResetToken();
-          return login(jwt, displayFallback);
+          login(profile);
         }}
       />
     );
@@ -149,13 +210,15 @@ export default function App() {
       <Navbar
         user={user}
         activeView={activeView}
+        activeMarketplace={activeMarketplace}
         notificacoes={notificacoes}
         naoLidas={naoLidas}
         onSelectView={setActiveView}
+        onSelectMarketplace={handleSelectMarketplace}
         onOpenNotification={handleOpenNotification}
         onMarkAllRead={() => void handleMarkAllRead()}
         onOpenAccount={() => setAccountModalOpen(true)}
-        onLogout={handleLogout}
+        onLogout={() => void handleLogout()}
       />
 
       <main className="max-w-6xl w-full mx-auto px-4 sm:px-6 py-6 flex-1">
@@ -169,6 +232,8 @@ export default function App() {
             onUpdateOwnDisplay={updateUserDisplay}
             onRefreshNotifications={() => void refreshNotifications()}
           />
+        ) : activeMarketplace === "amazon" ? (
+          <AmazonCalculator api={api} />
         ) : (
           <MagaluCalculator api={api} />
         )}

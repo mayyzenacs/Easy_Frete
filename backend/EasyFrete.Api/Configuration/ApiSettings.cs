@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Configuration;
+
 namespace EasyFrete.Api.Configuration;
 
 public sealed class ApiSettings
@@ -7,6 +9,7 @@ public sealed class ApiSettings
     public string JwtSecret { get; init; } = string.Empty;
     public string JwtIssuer { get; init; } = "easyfrete-api";
     public string JwtAudience { get; init; } = "easyfrete-web";
+    public int JwtExpirationMinutes { get; init; } = 60;
     public string ExternalCalcApiKey { get; init; } = string.Empty;
     public string SyncApiKey { get; init; } = string.Empty;
     public string SqlitePath { get; init; } = "data/easyfrete.db";
@@ -31,7 +34,7 @@ public sealed class ApiSettings
 
     public string NormalizedAdminEmail => AdminEmail.Trim().ToLowerInvariant();
 
-    public static ApiSettings FromEnvironment()
+    public static ApiSettings FromEnvironment(IConfiguration? configuration = null)
     {
         var problemas = new List<string>();
 
@@ -86,6 +89,21 @@ public sealed class ApiSettings
             problemas.Add("FRONTEND_BASE_URL deve ser uma URL HTTP/HTTPS válida");
         }
 
+        var jwtExpirationMinutes = 60;
+        var jwtExpRaw = configuration?["Jwt:ExpirationMinutes"]
+            ?? Environment.GetEnvironmentVariable("JWT_EXPIRATION_MINUTES");
+        if (!string.IsNullOrWhiteSpace(jwtExpRaw))
+        {
+            if (!int.TryParse(jwtExpRaw.Trim(), out var parsedExp) || parsedExp < 1 || parsedExp > 60)
+            {
+                problemas.Add("Jwt:ExpirationMinutes deve ser um inteiro entre 1 e 60");
+            }
+            else
+            {
+                jwtExpirationMinutes = parsedExp;
+            }
+        }
+
         var settings = new ApiSettings
         {
             AdminEmail = Obrigatoria("ADMIN_EMAIL"),
@@ -95,6 +113,7 @@ public sealed class ApiSettings
             SyncApiKey = Obrigatoria("SYNC_API_KEY"),
             JwtIssuer = Opcional("JWT_ISSUER", "easyfrete-api"),
             JwtAudience = Opcional("JWT_AUDIENCE", "easyfrete-web"),
+            JwtExpirationMinutes = jwtExpirationMinutes,
             SqlitePath = Opcional("SQLITE_PATH", "data/easyfrete.db"),
             FrontendBaseUrl = frontendBaseUrl,
             SmtpHost = Opcional("SMTP_HOST", string.Empty),

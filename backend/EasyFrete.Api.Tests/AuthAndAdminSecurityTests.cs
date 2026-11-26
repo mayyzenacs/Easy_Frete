@@ -1,11 +1,12 @@
 using System.Net;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EasyFrete.Api.Data;
+using EasyFrete.Api.Endpoints;
 using EasyFrete.Api.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.IdentityModel.JsonWebTokens;
 using NUnit.Framework;
 
 namespace EasyFrete.Api.Tests;
@@ -101,10 +102,12 @@ public sealed class AuthAndAdminSecurityTests
             email = "comum@easyfrete.test",
             password = "SenhaSegura123!"
         });
+        Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var loginJson = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        var token = loginJson.RootElement.GetProperty("token").GetString()!;
+        Assert.That(loginJson.RootElement.TryGetProperty("token", out _), Is.False);
+        var cookie = AuthCookieTestHelper.ExtractAuthCookie(login);
 
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        AuthCookieTestHelper.UseAuthCookie(_client, cookie);
         var list = await _client.GetAsync("/api/v1/admin/usuarios");
         Assert.That(list.StatusCode, Is.EqualTo(HttpStatusCode.Forbidden));
 
@@ -120,8 +123,8 @@ public sealed class AuthAndAdminSecurityTests
     [Test]
     public async Task AdminCanListRenamePromoteAndApproveUser()
     {
-        var adminToken = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+        var adminCookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, adminCookie);
 
         var register = await _client.PostAsJsonAsync("/api/v1/auth/register", new
         {
@@ -163,7 +166,8 @@ public sealed class AuthAndAdminSecurityTests
         });
         Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var loginJson = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        Assert.That(loginJson.RootElement.GetProperty("token").GetString(), Is.Not.Null.And.Not.Empty);
+        Assert.That(loginJson.RootElement.TryGetProperty("token", out _), Is.False);
+        AuthCookieTestHelper.ExtractAuthCookie(login);
         var returnedId = loginJson.RootElement
             .GetProperty("usuario")
             .GetProperty("id")
@@ -175,8 +179,8 @@ public sealed class AuthAndAdminSecurityTests
     [Test]
     public async Task AdminCannotDemoteOrUnapproveSelf()
     {
-        var adminToken = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", adminToken);
+        var adminCookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, adminCookie);
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -196,9 +200,8 @@ public sealed class AuthAndAdminSecurityTests
     [Test]
     public async Task AdminPatchWithEmptyJsonReturnsBadRequest()
     {
-        var adminToken = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", adminToken);
+        var adminCookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, adminCookie);
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -283,9 +286,8 @@ public sealed class AuthAndAdminSecurityTests
     [Test]
     public async Task AdminEndpoints_ListAllAndPatchValidationErrors()
     {
-        var adminToken = await LoginAdminAsync();
-        _client.DefaultRequestHeaders.Authorization =
-            new AuthenticationHeaderValue("Bearer", adminToken);
+        var adminCookie = await LoginAdminAsync();
+        AuthCookieTestHelper.UseAuthCookie(_client, adminCookie);
 
         var listAll = await _client.GetAsync("/api/v1/admin/usuarios");
         Assert.That(listAll.StatusCode, Is.EqualTo(HttpStatusCode.OK));
@@ -327,7 +329,8 @@ public sealed class AuthAndAdminSecurityTests
         Assert.That(changePrimaryAdminEmail.StatusCode, Is.EqualTo(HttpStatusCode.BadRequest));
     }
 
-    private async Task<string> LoginAdminAsync()
+    [Test]
+    public async Task Login_EmitsHttpOnlyCookieWith60MinExpiry_AuthMeWorks_AndLogoutClearsCookie()
     {
         var login = await _client.PostAsJsonAsync("/api/v1/auth/login", new
         {
@@ -335,7 +338,56 @@ public sealed class AuthAndAdminSecurityTests
             password = "AdminTeste123!"
         });
         Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+
+        using (var body = JsonDocument.Parse(await login.Content.ReadAsStringAsync()))
+        {
+            Assert.That(body.RootElement.TryGetProperty("token", out _), Is.False);
+            Assert.That(body.RootElement.GetProperty("usuario").GetProperty("email").GetString(),
+                Is.EqualTo("admin@easyfrete.test"));
+        }
+
+        var cookiePair = AuthCookieTestHelper.ExtractAuthCookie(login);
+        var jwtValue = cookiePair[(AuthEndpoints.AuthCookieName.Length + 1)..];
+        var parsedJwt = new JsonWebTokenHandler().ReadJsonWebToken(jwtValue);
+        var lifetime = parsedJwt.ValidTo - parsedJwt.IssuedAt;
+        Assert.That(lifetime.TotalMinutes, Is.EqualTo(60).Within(0.1));
+
+        // GET /api/v1/auth/me autenticado via cookie HttpOnly
+        AuthCookieTestHelper.UseAuthCookie(_client, cookiePair);
+        var me = await _client.GetAsync("/api/v1/auth/me");
+        Assert.That(me.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+        using (var meJson = JsonDocument.Parse(await me.Content.ReadAsStringAsync()))
+        {
+            Assert.That(meJson.RootElement.GetProperty("role").GetString(), Is.EqualTo(UserRoles.Master));
+        }
+
+        // POST /api/v1/auth/logout e alias POST /api/auth/logout expiram o cookie
+        foreach (var logoutPath in new[] { "/api/v1/auth/logout", "/api/auth/logout" })
+        {
+            var logoutRes = await _client.PostAsync(logoutPath, null);
+            Assert.That(logoutRes.StatusCode, Is.EqualTo(HttpStatusCode.OK));
+            Assert.That(logoutRes.Headers.TryGetValues("Set-Cookie", out var setCookies), Is.True);
+            var clearCookie = setCookies!.FirstOrDefault(c =>
+                c.StartsWith($"{AuthEndpoints.AuthCookieName}=", StringComparison.Ordinal));
+            Assert.That(clearCookie, Is.Not.Null);
+            var lower = clearCookie!.ToLowerInvariant();
+            Assert.That(lower, Does.Contain("expires=thu, 01 jan 1970"));
+            Assert.That(lower, Does.Contain("samesite=lax"));
+            Assert.That(lower, Does.Contain("path=/"));
+        }
+    }
+
+    private async Task<string> LoginAdminAsync()
+    {
+        AuthCookieTestHelper.UseAuthCookie(_client, null);
+        var login = await _client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            email = "admin@easyfrete.test",
+            password = "AdminTeste123!"
+        });
+        Assert.That(login.StatusCode, Is.EqualTo(HttpStatusCode.OK));
         using var json = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
-        return json.RootElement.GetProperty("token").GetString()!;
+        Assert.That(json.RootElement.TryGetProperty("token", out _), Is.False);
+        return AuthCookieTestHelper.ExtractAuthCookie(login);
     }
 }

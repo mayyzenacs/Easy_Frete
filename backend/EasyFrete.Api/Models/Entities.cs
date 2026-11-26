@@ -29,6 +29,25 @@ public static class NotificationTypes
     public const string ExclusaoRecusada = "ExclusaoRecusada";
 }
 
+public static class AmazonModalidades
+{
+    public const string Dba = "DBA";
+    public const string Fba = "FBA";
+}
+
+public static class AmazonTiposRegra
+{
+    public const string Fixo = "FIXO";
+    public const string FaixaPeso = "FAIXA_PESO";
+    public const string KgAdicional = "KG_ADICIONAL";
+}
+
+public static class AmazonFreteClientes
+{
+    public const string Gratis = "GRATIS";
+    public const string PagoPeloCliente = "PAGO_PELO_CLIENTE";
+}
+
 public class Usuario
 {
     public Guid Id { get; set; } = Guid.CreateVersion7();
@@ -134,5 +153,30 @@ public class ConfiguracaoMagalu
     public decimal PercentualAbaixoLimiteColeta { get; set; }
     public decimal DivisorCubagem { get; set; }
     public decimal PercentualReputacaoMinima { get; set; }
+    public DateTime AtualizadoEm { get; set; }
+}
+
+public class TarifaAmazon
+{
+    public int Id { get; set; }
+    public string Modalidade { get; set; } = string.Empty;
+    public string TipoRegra { get; set; } = string.Empty;
+    public string DescricaoFaixaPeso { get; set; } = string.Empty;
+    public decimal PrecoMin { get; set; }
+    public decimal PrecoMax { get; set; }
+    public decimal PesoMinKg { get; set; }
+    public decimal PesoMaxKg { get; set; }
+    public decimal Tarifa { get; set; }
+    public string FreteCliente { get; set; } = string.Empty;
+}
+
+public class ConfiguracaoAmazon
+{
+    public int Id { get; set; }
+    public bool UsaPesoCubado { get; set; }
+    public decimal LimitePrecoTabelaPeso { get; set; }
+    public decimal LimitePesoTabelaKg { get; set; }
+    public string RegiaoReferenciaDba { get; set; } = string.Empty;
+    public decimal TaxaFixaObrigatoria { get; set; }
     public DateTime AtualizadoEm { get; set; }
 }
